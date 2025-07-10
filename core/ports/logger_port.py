@@ -1,0 +1,13 @@
+from abc import ABC, abstractmethod
+
+class ILoggerPort(ABC):
+    """Core'un tek bildiği log arabirimi."""
+
+    @abstractmethod
+    def debug(self, message: str): ...
+    @abstractmethod
+    def info(self,  message: str): ...
+    @abstractmethod
+    def warning(self, message: str): ...
+    @abstractmethod
+    def error(self, message: str): ...
