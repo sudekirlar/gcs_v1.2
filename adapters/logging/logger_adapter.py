@@ -1,3 +1,5 @@
+# adapters/logging/logger_adapter.py
+
 import logging
 from pathlib import Path
 from PyQt5.QtCore import QObject, pyqtSignal

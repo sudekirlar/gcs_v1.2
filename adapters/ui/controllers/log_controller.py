@@ -1,3 +1,5 @@
+# adapters/ui/controllers/log_controller.py
+
 from PyQt5.QtCore import QObject, pyqtSlot
 from adapters.logging.logger_adapter import LoggerAdapter  # tip ipucu
 

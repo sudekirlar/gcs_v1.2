@@ -1,3 +1,5 @@
+# adapters/ui/controllers/telemetry_controller.py
+
 from PyQt5.QtCore import QObject, pyqtSlot
 
 class TelemetryController(QObject):

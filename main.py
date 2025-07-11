@@ -1,3 +1,5 @@
+# main.py
+
 from PyQt5.QtWidgets import QApplication
 
 from config.settings import Settings

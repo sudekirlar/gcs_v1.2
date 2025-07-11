@@ -1,3 +1,5 @@
+# adapters/ui/controllers/connection_controller.py
+
 from PyQt5.QtCore import QObject, pyqtSlot
 from PyQt5.QtSerialPort import QSerialPortInfo
 

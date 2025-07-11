@@ -1,3 +1,5 @@
+# adapters/mavlink/helpers/message_parser.py
+
 from typing import Dict
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 from pymavlink import mavutil

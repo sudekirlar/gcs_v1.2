@@ -1,3 +1,5 @@
+# core/ports/logger_port.py
+
 from typing import Protocol, runtime_checkable
 
 @runtime_checkable

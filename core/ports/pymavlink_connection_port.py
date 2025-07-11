@@ -1,3 +1,5 @@
+#core/ports/pymavlink_connection_port.py
+
 """
 Core’un bağlantı katmanını tanıdığı *yapısal* arayüz.
 PymavlinkAdapter (ve ileride başka adaptörler) bu imzayı sağladığı

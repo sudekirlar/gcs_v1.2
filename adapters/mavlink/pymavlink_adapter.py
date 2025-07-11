@@ -1,4 +1,5 @@
 # adapters/mavlink/pymavlink_adapter.py
+
 from typing import Optional
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from pymavlink import mavutil

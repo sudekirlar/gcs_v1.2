@@ -1,4 +1,5 @@
 # adapters/ui/main_window.py
+
 from PyQt5.QtWidgets import QMainWindow
 from newDesign import Ui_MainWindow          # Qt Designer çıktısı
 

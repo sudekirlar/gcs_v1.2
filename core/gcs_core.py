@@ -1,3 +1,5 @@
+# core/gcs_core.py
+
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from core.ports.logger_port import ILoggerPort
