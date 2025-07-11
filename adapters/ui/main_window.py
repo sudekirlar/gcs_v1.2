@@ -1,6 +1,8 @@
 # adapters/ui/main_window.py
 
 from PyQt5.QtWidgets import QMainWindow
+
+from adapters.ui.controllers.command_controller import CommandController
 from newDesign import Ui_MainWindow          # Qt Designer çıktısı
 
 # Controller importları
@@ -42,6 +44,8 @@ class MainWindow(QMainWindow):
         # 3. Telemetri gösterimi
         self.tel_ctrl = TelemetryController(
             self.telemetry_widgets, core, parent=self)
+
+        self.cmd_ctrl = CommandController(self.ui, core, logger, parent=self)
 
     # ------------ Widget kısayolları ------------
     @property
