@@ -1,24 +1,26 @@
 from PyQt5.QtWidgets import QApplication
+
+from config.settings import Settings
 from adapters.logging.logger_adapter import LoggerAdapter
-from adapters.ui.main_window import MainWindow
-from adapters.ui.controllers.log_controller import LogController
+from adapters.mavlink.pymavlink_adapter import PymavlinkAdapter
 from core.gcs_core import GCSCore
+from adapters.ui.main_window import MainWindow   # controller'lar içeride kuruluyor
 
-def main():
-    logger = LoggerAdapter(level="DEBUG")
-    core   = GCSCore(logger_port=logger)
+# ----- Konfigürasyonu yükle -----
+cfg = Settings()
 
-    app = QApplication([])
-    window = MainWindow()                 # Salt view
-    window.show()
+# ----- Ortak logger -----
+logger = LoggerAdapter(level=cfg.log_level, file_path=str(cfg.log_path))
 
-    # --- Controller'ı bağla ---
-    LogController(window.log_text_edit, logger)   # tek sorumluluk
+# ----- Bağlantı adaptörü + Core -----
+adapter = PymavlinkAdapter(logger)
+core    = GCSCore(adapter, logger)
 
-    logger.info("Uygulama başlatıldı")   # Dosya + terminal + GUI
-    core.start()
+# ----- Qt uygulaması -----
+app = QApplication([])
 
-    app.exec_()
+# MainWindow, controller'ları kendi ctor'unda oluşturur
+win = MainWindow(core=core, logger=logger)
+win.show()
 
-if __name__ == "__main__":
-    main()
+app.exec_()
