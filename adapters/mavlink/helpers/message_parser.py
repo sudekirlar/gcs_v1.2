@@ -6,8 +6,8 @@ from pymavlink import mavutil
 
 
 class MessageParser(QObject):
-    """Ham MAVLink mesajı → okunabilir dict + diff filtresi (yalnız değişenleri yayar)."""
-    telemetry = pyqtSignal(dict)          # örn. {'yaw':…, 'lat':…}
+    """Ham MAVLink mesajı → okunabilir dict; yalnız değişen alanlar yayılır."""
+    telemetry = pyqtSignal(dict)          # örn. {'yaw':…, 'armed':…}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -21,7 +21,6 @@ class MessageParser(QObject):
 
         # ----------------- ATTITUDE -----------------
         if t == "ATTITUDE":
-            # rad → deg  (57.2958)
             yaw_deg   = msg.yaw   * 57.2958
             pitch_deg = msg.pitch * 57.2958
             roll_deg  = msg.roll  * 57.2958
@@ -29,7 +28,7 @@ class MessageParser(QObject):
             d = {
                 "yaw":   (yaw_deg + 360) % 360,   # 0–360°
                 "pitch": abs(pitch_deg),          # pozitif
-                "roll":  abs(roll_deg)            # pozitif
+                "roll":  abs(roll_deg)
             }
 
         # ----------------- GLOBAL POSITION -----------------
@@ -47,9 +46,14 @@ class MessageParser(QObject):
         elif t == "GPS_RAW_INT":
             d = {"hdop": msg.eph / 100.0}
 
-        # ----------------- MOD -----------------
+        # ----------------- HEARTBEAT -----------------
         elif t == "HEARTBEAT":
-            d = {"mode": mavutil.mode_string_v10(msg)}
+            d = {
+                "mode":  mavutil.mode_string_v10(msg),
+                "armed": bool(
+                    msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+                )
+            }
 
         # ----------------- Diff filtresi -----------------
         if not d:
@@ -59,3 +63,4 @@ class MessageParser(QObject):
         if changed:
             self._last.update(changed)
             self.telemetry.emit(changed)
+

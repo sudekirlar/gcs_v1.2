@@ -38,10 +38,12 @@ class GCSCore(QObject):
     def _on_telemetry(self, data: Dict[str, Any]):
         if "mode" in data:
             self._mode = data["mode"].upper()
+        if "armed" in data:               # ← yeni alan
+            self._armed = bool(data["armed"])
         self.telemetry_updated.emit(data)
 
     # =================================================================
-    # KULLANICI KOMUTLARI (UI bu metotları çağırır)
+    # KULLANICI KOMUTLARI
     # =================================================================
     def arm(self):
         if self._armed:
@@ -63,32 +65,23 @@ class GCSCore(QObject):
         self._logger.info(f"TAKEOFF({altitude_m} m) gönderiliyor…")
         self._adapter.takeoff(altitude_m)
 
-    def land(self):        self._logger.info("LAND gönderiliyor…");  self._adapter.land()
-    def set_mode(self, m): self._logger.info(f"SET_MODE({m})…");     self._adapter.set_mode(m)
+    def land(self):
+        self._logger.info("LAND gönderiliyor…")
+        self._adapter.land()
+
+    def set_mode(self, m: str):
+        self._logger.info(f"SET_MODE({m})…")
+        self._adapter.set_mode(m)
 
     # =================================================================
-    # ACK DÖNÜŞÜ  (gelen komut adı uzun olabilir)
+    # ACK DÖNÜŞÜ – yalnız log + UI
     # =================================================================
     def _on_ack(self, cmd_name: str, result: int):
         self._logger.info(f"ACK alındı ► {cmd_name} | result={result}")
-
-        if result == 0:  # sadece başarıda güncelle
-            up = cmd_name.upper()
-
-            if "ARM_DISARM" in up:
-                # result=0 ve param1=1 gönderdiğimizi biliyoruz → arm
-                if self._armed is False:
-                    self._armed = True
-                    self._logger.info("Durum güncellendi: ARMED")
-
-            elif "SET_MODE" in up:
-                # Telemetry zaten mod değişimini getirir; ek işlem yok
-                pass
-
         self.command_ack_received.emit(cmd_name, result)
 
     # =================================================================
-    # PORT BAĞLANTI METOTLARI
+    # PORT BAĞLANTI
     # =================================================================
     def connect(self, descr: str):
         if descr.startswith("TCP"):
@@ -108,3 +101,4 @@ class GCSCore(QObject):
     def _reject(self, cmd: str, reason: str):
         self._logger.warning(f"{cmd} reddedildi: {reason}")
         self.command_ack_received.emit(cmd, -1)
+
