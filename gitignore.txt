@@ -1,0 +1,8 @@
+.env
+*.log
+__pycache__/
+build/
+dist/
+logs/gcs.log
+.idea/
+

@@ -9,6 +9,11 @@ from newDesign import Ui_MainWindow          # Qt Designer çıktısı
 from adapters.ui.controllers.connection_controller import ConnectionController
 from adapters.ui.controllers.telemetry_controller  import TelemetryController
 from adapters.ui.controllers.log_controller        import LogController
+from adapters.ui.request_listener_worker import RequestListenerWorker   # üstteki import
+from PyQt5.QtGui import QTextCursor
+from datetime import datetime, timezone
+
+
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +52,11 @@ class MainWindow(QMainWindow):
 
         self.cmd_ctrl = CommandController(self.ui, core, logger, parent=self)
 
+
+        self._request_listener = RequestListenerWorker(self)
+        self._request_listener.newReq.connect(self._display_mobile_msg)  # ← slot ekleyin
+        self._request_listener.start()
+
     # ------------ Widget kısayolları ------------
     @property
     def combo(self):
@@ -81,3 +91,11 @@ class MainWindow(QMainWindow):
             "hdop":  self.ui.hdop_textEdit,
             "mode":  self.ui.currentMode_textEdit,
         }
+
+    def _display_mobile_msg(self, req):  # req: AssistanceRequest
+        now = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        line = (f"[{now}]  Durum:{req.durum}  "
+                f"TC:{req.tc}  "
+                f"Konum:{req.lat:.5f}, {req.lon:.5f}")
+        self.ui.mobileBox_textEdit.append(line)
+        self.ui.mobileBox_textEdit.moveCursor(QTextCursor.End)  # en alta kaydır
