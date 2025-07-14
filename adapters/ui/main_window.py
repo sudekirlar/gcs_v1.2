@@ -7,7 +7,8 @@ from adapters.ui.controllers.connection_controller  import ConnectionController
 from adapters.ui.controllers.telemetry_controller   import TelemetryController
 from adapters.ui.controllers.log_controller         import LogController
 from adapters.ui.controllers.map_controller         import MapController
-from newDesign import Ui_MainWindow                 # Designer çıktısı
+from adapters.ui.controllers.assistance_controller  import AssistanceController
+from newDesign import Ui_MainWindow                 # pyuic5 çıktısı
 
 
 class MainWindow(QMainWindow):
@@ -24,40 +25,40 @@ class MainWindow(QMainWindow):
         self.ui.minimize_pushButton.clicked.connect(self.showMinimized)
 
         # ------------ mapShown_label → QWebEngineView ------------
-        placeholder = self.ui.mapShown_label              # Designer'daki QLabel
+        placeholder = self.ui.mapShown_label
         self.mapView = QWebEngineView(self.ui.centralwidget)
         self.mapView.setObjectName("mapView")
         self.mapView.setSizePolicy(placeholder.sizePolicy())
         self.mapView.setGeometry(placeholder.geometry())
 
+        # ---- AssistanceController: artık self.ui veriyoruz (1 değişiklik) ----
+        self._assist = AssistanceController(self.ui, logger)           # ← düzeltildi
+        core.mobile_request_added.connect(self._assist.on_request)
+
+        # placeholder'ı layout’ta değiştir
         parent_layout = placeholder.parent().layout()
         if parent_layout is not None:
             idx = parent_layout.indexOf(placeholder)
             parent_layout.insertWidget(idx, self.mapView)
         else:
-            # Widget hiçbir layout içinde değilse, sadece göster
             self.mapView.show()
-
         placeholder.deleteLater()
 
-        # ------------ Controller'lar ------------
+        # ------------ Diğer Controller'lar ------------
         self.log_ctrl = LogController(self.log_panel, logger)
-
         self.conn_ctrl = ConnectionController(
-            combo       = self.combo,
-            button      = self.connect_btn,
-            status_edit = self.status_edit,
-            core        = core,
-            logger      = logger,
-            close_button= self.close_btn,
-            parent      = self)
+            combo        = self.combo,
+            button       = self.connect_btn,
+            status_edit  = self.status_edit,
+            core         = core,
+            logger       = logger,
+            close_button = self.close_btn,
+            parent       = self)
 
-        self.tel_ctrl = TelemetryController(
-            self.telemetry_widgets, core, parent=self)
-
+        self.tel_ctrl = TelemetryController(self.telemetry_widgets, core, parent=self)
         self.cmd_ctrl = CommandController(self.ui, core, logger, parent=self)
 
-        # MapController GERÇEK mapView ile bağlanıyor
+        # MapController gerçek mapView ile bağlanıyor
         self.map_ctrl = MapController(
             map_widget = self.mapView,
             core       = core,
@@ -65,17 +66,11 @@ class MainWindow(QMainWindow):
             parent     = self)
 
         # ---- UI ↔ Map bağlantıları ----
-        self.ui.clearPath_pushButton.clicked.connect(
-            self.map_ctrl.clear_path)
-        self.ui.addMarker_pushButton.clicked.connect(
-            self.map_ctrl.add_marker_here)
-        self.ui.clearMarker_pushButton.clicked.connect(
-            self.map_ctrl.clear_markers)
-        self.ui.goToFocus_pushButton.clicked.connect(
-            self.map_ctrl.recenter_and_follow)
-
-        self.ui.saveMission_pushButton.clicked.connect(
-            self.map_ctrl.start_demo)
+        self.ui.clearPath_pushButton.clicked.connect(self.map_ctrl.clear_path)
+        self.ui.addMarker_pushButton.clicked.connect(self.map_ctrl.add_marker_here)
+        self.ui.clearMarker_pushButton.clicked.connect(self.map_ctrl.clear_markers)
+        self.ui.goToFocus_pushButton.clicked.connect(self.map_ctrl.recenter_and_follow)
+        self.ui.saveMission_pushButton.clicked.connect(self.map_ctrl.start_demo)
 
     # ------------ Widget kısayolları ------------
     @property

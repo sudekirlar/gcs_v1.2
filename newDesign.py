@@ -477,7 +477,7 @@ class Ui_MainWindow(object):
                                                   "background-color: transparent;\n"
                                                   "")
         self.mobileBox_textEdit.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.mobileBox_textEdit.setObjectName("criticalShown_textEdit")
+        self.mobileBox_textEdit.setObjectName("mobileBox_textEdit")
 
         self.progressBar = QtWidgets.QProgressBar(self.centralwidget)
         self.progressBar.setGeometry(QtCore.QRect(30, 1020, 191, 31))
