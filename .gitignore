@@ -5,4 +5,5 @@ build/
 dist/
 logs/gcs.log
 .idea/
-
+*.MP4
+*.pt
