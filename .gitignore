@@ -8,3 +8,4 @@ logs/gcs.log
 *.MP4
 *.pt
 *.pyc
+config/firebase_key.json
