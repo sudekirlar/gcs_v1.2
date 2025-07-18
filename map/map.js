@@ -22,7 +22,7 @@ window.onload = () => {
   new QWebChannel(qt.webChannelTransport, ch => {
     window.backend = ch.objects.backend;
     initMap();
-    //backend.onMapReady();
+    backend.onMapReady();
     // Demo'yu otomatik başlat
     startDemoFlight();
   });

@@ -1,18 +1,20 @@
 # config/settings.py
+# config/settings.py
+from __future__ import annotations
 from pathlib import Path
-from typing  import List, Tuple
-from pydantic import BaseModel, Field, ConfigDict
-from pydantic_settings import BaseSettings
+from typing import Tuple
+
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# ---------- Kamera kaynak modeli ----------
+# ---------- Alt modeller ----------
 class CameraSource(BaseModel):
     name: str
     path: str
 
 
 def _default_cam_sources() -> Tuple[CameraSource, ...]:
-    # Tuple = immutable → v1 veya v2 her ikisi de 'mutable default' demez
     return (
         CameraSource(name="Laptop Kamerası", path="0"),
         CameraSource(name="Test Videosu",    path="source_videos/test2.mp4"),
@@ -25,14 +27,19 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_path : Path = Path("logs/gcs.log")
 
-    # ----- Serial ------
+    # ----- Serial -----
     baudrate: int = 115200
 
-    # ----- TCP/SITL ----
+    # ----- TCP/SITL -----
     tcp_host: str = "127.0.0.1"
     tcp_port: int = 5760
 
-    # ----- Kamera ------
+    # ----- Firebase -----
+    firebase_credentials_json_path: Path  # .env ⇒ FIREBASE_CREDENTIALS_JSON_PATH
+    firebase_db_url: str                  # .env ⇒ FIREBASE_DB_URL
+    firebase_db_path: str = "/mobil"      # .env ⇒ FIREBASE_DB_PATH
+
+    # ----- Kamera -----
     camera_sources: Tuple[CameraSource, ...] = Field(
         default_factory=_default_cam_sources
     )
@@ -40,8 +47,10 @@ class Settings(BaseSettings):
         "640x480", "1280x720", "1920x1080"
     )
 
-    # ----- Pydantic config -----
-    model_config = ConfigDict(
+    # ----- Pydantic -----
+    model_config = SettingsConfigDict(
         env_file=".env",
-        env_file_encoding="utf-8"
+        env_file_encoding="utf-8",
+        # env_prefix=""  # istersen tüm env’lere ortak prefix ekleyebilirsin
+        extra="forbid"   # bilinmeyen env değişkenlerini reddetmeye devam eder
     )
