@@ -69,6 +69,11 @@ class _Worker(QObject):
 
                     self.command_ack.emit(cmd_name, msg.result)
 
+                elif msg.get_type() == "MISSION_ACK":
+                    # ArduPilot: type 0=ACCEPTED, 1=ERROR, 2=UNSUPPORTED, 3=NO_SPACE
+                    result = msg.type  # uint8 result kodu
+                    self.command_ack.emit("MISSION_ACK", result)
+
                 elif msg.get_type() == "STATUSTEXT":  # <-- YENİ BLOK
                     # Gelen durumu loglayalım ki nedenini görelim
                     text = msg.text.strip()
@@ -139,6 +144,9 @@ class PymavlinkAdapter(QObject):
     def land(self):                self._cmd_q.put(CommandFactory.land())
     def takeoff(self, alt: float): self._cmd_q.put(CommandFactory.takeoff(alt))
     def set_mode(self, mode: str): self._cmd_q.put(CommandFactory.set_mode(mode))
+
+    def goto(self, lat, lon, alt, yaw=0.0):
+        self._cmd_q.put(CommandFactory.goto(lat, lon, alt, yaw))
 
     # ---------- internal ----------
     def _start_worker(self, url: str):

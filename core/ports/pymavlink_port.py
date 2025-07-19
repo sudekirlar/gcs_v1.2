@@ -1,23 +1,25 @@
-# core/ports/pymavlink_port.py
+"""
+rev.4 – goto(...) imzası eklendi
+"""
 
 from typing import Protocol, runtime_checkable, Any
 
+
 @runtime_checkable
 class IPyMavlinkPort(Protocol):
-    connected: Any;
-    failed: Any;
-    disconnected: Any
-    telemetry: Any;
-    command_ack: Any
+    connected: Any; failed: Any; disconnected: Any
+    telemetry: Any; command_ack: Any
 
     # Bağlantı
     def open_serial(self, port: str, baudrate: int) -> None: ...
     def open_tcp(self, host: str, tcp_port: int) -> None: ...
     def close(self) -> None: ...
 
-    # ----------- yeni üst-seviye komutlar -----------
+    # Komutlar
     def arm(self) -> None: ...
     def disarm(self) -> None: ...
     def land(self) -> None: ...
     def takeoff(self, altitude_m: float) -> None: ...
     def set_mode(self, mode: str) -> None: ...
+    def goto(self, lat: float, lon: float, alt: float,
+             yaw: float = 0.0) -> None: ...

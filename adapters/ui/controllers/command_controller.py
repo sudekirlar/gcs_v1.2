@@ -18,6 +18,8 @@ class CommandController(QObject):
         ui.land_pushButton.clicked.connect(core.land)
         ui.takeOff_pushButton.clicked.connect(self._takeoff)
         ui.changeMode_pushButton.clicked.connect(self._set_mode)
+        # “Göreve Ara” → kesinti başlat
+        ui.loadMission_pushButton.clicked.connect(self._start_mobile_interrupt)
 
         # --- ACK geri bildirimi ---
         core.command_ack_received.connect(self._ack_status)
@@ -38,8 +40,20 @@ class CommandController(QObject):
         self._logger.info(f"Kullanıcı mod değiştirmek istedi: {mode}")
         self._core.set_mode(mode)
 
-    # -------------------- ACK UI feedback --------------------
+    @pyqtSlot()
+    def _start_mobile_interrupt(self):
+        req = self._core._latest_mobile_req  # getter da yazabilirsin
+        if not req:
+            self._logger.warning("Mobil istek yok")
+            return
+        self._logger.info("Kullanıcı: Görevi kes – mobil hedefe git")
+        self._core.interrupt_mission_for_request(req)
+
     @pyqtSlot(str, int)
-    def _ack_status(self, cmd: str, result: int):
-        txt = "kabul" if result == 0 else f"REDDİ ({result})"
+    def _ack_status(self, cmd, res):
+        if cmd == "MISSION_ACK":
+            txt_map = {0: "ACCEPTED", 1: "ERROR", 2: "UNSUPPORTED", 3: "NO_SPACE"}
+            txt = txt_map.get(res, f"CODE {res}")
+        else:
+            txt = "OK" if res == 0 else f"Hata({res})"
         self._ui.currentState_textEdit_2.append(f"{cmd} → {txt}")

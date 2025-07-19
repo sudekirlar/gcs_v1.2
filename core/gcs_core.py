@@ -1,79 +1,111 @@
 # core/gcs_core.py
-from typing import Dict, Any
-
+from __future__ import annotations
+from typing import Dict, Optional, Any
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from config.settings import Settings
-from core.ports.logger_port import ILoggerPort
+from core.ports.logger_port   import ILoggerPort
 from core.ports.pymavlink_port import IPyMavlinkPort
-from core.ports.firebase_port import IFirebasePort         # ★ yeni
-from core.assistance_request import AssistanceRequest      # ★ yeni
+from core.ports.firebase_port  import IFirebasePort
+from core.assistance_request   import AssistanceRequest
 
 _cfg = Settings()
 
 
 class GCSCore(QObject):
-    # ----- Qt sinyalleri -----
+    # ---------- Qt sinyalleri ----------
     telemetry_updated    = pyqtSignal(dict)
     connection_opened    = pyqtSignal(str)
     connection_failed    = pyqtSignal(str)
     connection_closed    = pyqtSignal(str)
-    command_ack_received = pyqtSignal(str, int)            # cmd_name, result
+    command_ack_received = pyqtSignal(str, int)
 
-    mobile_request_added = pyqtSignal(AssistanceRequest)   # ★ yeni
+    mobile_request_added = pyqtSignal(AssistanceRequest)
 
-    # -----------------------------------------------------------------
-    # ctor
-    # -----------------------------------------------------------------
+    # ---------- ctor ----------
     def __init__(
         self,
         mav_adapter: IPyMavlinkPort,
-        fb_adapter:  IFirebasePort,                # ★ yeni
-        logger:      ILoggerPort,
+        fb_adapter : IFirebasePort,
+        logger     : ILoggerPort,
         parent=None
     ):
         super().__init__(parent)
+        self._mav, self._fb, self._log = mav_adapter, fb_adapter, logger
 
-        self._mav = mav_adapter
-        self._fb  = fb_adapter                      # ★
-        self._log = logger
+        # Uçuş durumu
+        self._armed = False
+        self._mode  = "STABILIZE"
+        self._current_alt = 0.0
 
-        self._armed: bool = False
-        self._mode:  str  = "STABILIZE"
+        # Mobil istekler
+        self._latest_mobile_req: Optional[AssistanceRequest] = None
 
-        # ----- MAVLink port sinyalleri -----
+        #  -- Kesinti iş akışı değişkenleri --
+        self._awaiting_guided = False
+        self._pending_req    : Optional[AssistanceRequest] = None
+        self._pending_alt    = 0.0
+
+        # MAVLink sinyalleri
         mav_adapter.connected.connect(self.connection_opened)
         mav_adapter.failed.connect(self.connection_failed)
         mav_adapter.disconnected.connect(self.connection_closed)
         mav_adapter.telemetry.connect(self._on_telemetry)
         mav_adapter.command_ack.connect(self._on_ack)
 
-        # ----- Firebase port sinyalleri -----
-        fb_adapter.new_request.connect(self._on_mobile_request)    # ★
-        fb_adapter.error.connect(self._log.error)                  # ★
+        # Firebase sinyalleri
+        fb_adapter.new_request.connect(self._on_mobile_request)
+        fb_adapter.error.connect(self._log.error)
 
     # =================================================================
-    # TELEMETRY
+    # TELEMETRY  – durum makinesi
     # =================================================================
     @pyqtSlot(dict)
-    def _on_telemetry(self, data: Dict[str, Any]):
-        if "mode" in data:
-            self._mode = data["mode"].upper()
-        if "armed" in data:
-            self._armed = bool(data["armed"])
-        self.telemetry_updated.emit(data)
+    def _on_telemetry(self, d: Dict[str, Any]):
+        if "alt"  in d: self._current_alt = d["alt"]
+
+        if "mode" in d:
+            new_mode = d["mode"].upper()
+            if new_mode != self._mode:
+                self._mode = new_mode
+                self._log.info(f"[MODE] {self._mode}")
+
+                # GUIDED teyidi bekliyorsak
+                if self._awaiting_guided and self._mode == "GUIDED" \
+                        and self._pending_req:
+                    r = self._pending_req
+                    alt = self._pending_alt
+                    self._awaiting_guided = False
+                    self._pending_req = None
+                    self._log.info("♦ NAV_WAYPOINT gönderiliyor (mobil hedef)")
+                    self._mav.goto(r.lat, r.lon, alt)
+
+        if "armed" in d: self._armed = bool(d["armed"])
+        self.telemetry_updated.emit(d)
 
     # =================================================================
     # MOBİL YARDIM İSTEKLERİ
     # =================================================================
     @pyqtSlot(AssistanceRequest)
     def _on_mobile_request(self, req: AssistanceRequest):
-        """
-        Firebase'den gelen yeni yardım çağrısı.
-        UI katmanı mobile_request_added sinyaline abone olur.
-        """
         self._log.info(f"Yeni mobil istek ► TC={req.tc} | {req.durum}")
+        self._latest_mobile_req = req
         self.mobile_request_added.emit(req)
+
+    # -----------------------------------------------------------------
+    # UI → “Göreve Ara” butonu çağırır
+    # -----------------------------------------------------------------
+    def interrupt_mission_for_request(self, req: AssistanceRequest):
+        if self._mode != "AUTO":
+            self._log.warning("Görev kesilemedi: Drone AUTO modda değil")
+            return
+
+        self._pending_req = req
+        self._pending_alt = max(self._current_alt, 10.0)  # güvenli irtifa
+        self._awaiting_guided = True
+
+        self._log.info("♦ Adım 1: GUIDED moda geç komutu gönderildi")
+        self.set_mode("GUIDED")
 
     # =================================================================
     # KULLANICI KOMUTLARI
