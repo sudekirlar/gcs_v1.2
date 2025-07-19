@@ -101,7 +101,7 @@ class GCSCore(QObject):
             return
 
         self._pending_req = req
-        self._pending_alt = max(self._current_alt, 10.0)  # güvenli irtifa
+        self._pending_alt = max(self._current_alt, 5.0)  # güvenli irtifa
         self._awaiting_guided = True
 
         self._log.info("♦ Adım 1: GUIDED moda geç komutu gönderildi")
