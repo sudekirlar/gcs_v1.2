@@ -518,6 +518,7 @@ class Ui_MainWindow(object):
         self.mode_comboBox.addItem("STABILIZE")
         self.mode_comboBox.addItem("AUTO")
         self.mode_comboBox.addItem("LOITER")
+        self.mode_comboBox.addItem("RTL")
         self.exit_pushButton = redButton("", self.centralwidget)
         self.exit_pushButton.setGeometry(QtCore.QRect(1860, 30, 31, 31))
         self.exit_pushButton.setStyleSheet("background-color: transparent;")
