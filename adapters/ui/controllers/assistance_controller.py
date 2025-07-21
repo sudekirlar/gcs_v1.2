@@ -24,11 +24,12 @@ class AssistanceController(QObject):
         "!": "İhtiyaç: Acil Müdahale Ekipleri",
     }
 
-    def __init__(self, ui, logger: LoggerAdapter, parent=None):
+    def __init__(self, ui, logger: LoggerAdapter, map_controller, parent=None):
         super().__init__(parent)
         self._ui = ui
         self._log = logger
         self._requests = []
+        self._map = map_controller
 
         # QTextEdit yerine QListWidget yerleştir
         self._ui.mobileBox_textEdit.setVisible(False)
@@ -41,6 +42,7 @@ class AssistanceController(QObject):
         """)
         self._ui.tab_7.setStyleSheet("background: transparent;")
         self._ui.mobileBox_listWidget = self._list  # UI dışından erişim için
+        self._list.itemClicked.connect(self._on_item_clicked)
 
     def on_request(self, r: AssistanceRequest):
         desc = self._DESC_MAP.get(r.durum, "İhtiyaç: Bilinmeyen")
@@ -67,16 +69,30 @@ class AssistanceController(QObject):
         label.adjustSize()
         item.setSizeHint(label.sizeHint())
 
+
+
         self._list.addItem(item)
         self._list.setItemWidget(item, label)
 
         self._requests.append(r)
+        self._map.add_marker(r.lat, r.lon, f"mobil_{r.tc}")
 
     def get_selected_request(self) -> AssistanceRequest | None:
         idx = self._list.currentRow()
+        print(f"[DEBUG] Seçili index: {idx}")
         if 0 <= idx < len(self._requests):
-            return self._requests[idx]
+            selected = self._requests[idx]
+            print(f"[DEBUG] Seçildi: {selected}")
+            self._log.info(f"Seçildi: {selected}")
+            return selected
         self._log.warning("Yardım isteği seçilmedi.")
         return None
+
+    def _on_item_clicked(self, item: QListWidgetItem):
+        request = self.get_selected_request()
+        if request:
+            self._log.info(f"[TIKLAMA] Seçildi: {request}")
+
+
 
 

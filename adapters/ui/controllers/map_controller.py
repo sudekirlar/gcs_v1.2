@@ -59,6 +59,12 @@ class MapController(QObject):
         mkid = f"mk_{int(time.time())}"
         self._pg.runJavaScript(f"addMarker({lon}, {lat}, '{mkid}')")
 
+    def add_marker(self, lat: float, lon: float, mkid: str = ""):
+        """Haritaya marker ekler mobilden gelen konum"""
+        if not mkid:
+            mkid = f"mk_{int(time.time())}"
+        self._pg.runJavaScript(f"addMarker({lon}, {lat}, '{mkid}')")
+
     def clear_markers(self):
         self._pg.runJavaScript("clearMarkers()")
 

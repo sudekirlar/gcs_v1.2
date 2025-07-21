@@ -36,9 +36,9 @@ class Settings(BaseSettings):
     tcp_port: int = 5760
 
     # ----- Firebase -----
-    firebase_credentials_json_path: Path  # .env ⇒ FIREBASE_CREDENTIALS_JSON_PATH
-    firebase_db_url: str                  # .env ⇒ FIREBASE_DB_URL
-    firebase_db_path: str = "/mobil"      # .env ⇒ FIREBASE_DB_PATH
+    firebase_credentials_json_path: Path = Field(..., alias="FIREBASE_CREDENTIALS_JSON_PATH")
+    firebase_db_url: str = Field(..., alias="FIREBASE_DB_URL")            # .env ⇒ FIREBASE_DB_URL
+    firebase_db_path: str = Field("/mobil", alias="FIREBASE_DB_PATH")
 
     # ----- Kamera -----
     camera_sources: Tuple[CameraSource, ...] = Field(

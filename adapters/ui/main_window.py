@@ -61,9 +61,7 @@ class MainWindow(QMainWindow):
             self.mapView.show()
         placeholder.deleteLater()
 
-        # ------------ AssistanceController (mobil) ------------
-        self._assist = AssistanceController(self.ui, self._log)
-        core.mobile_request_added.connect(self._assist.on_request)
+
         self.ui.loadMission_pushButton.clicked.connect(self._deliver_aid)
 
         # ------------ Kamera Controller ------------
@@ -105,6 +103,10 @@ class MainWindow(QMainWindow):
             logger=self._log,
             parent=self,
         )
+
+        # ------------ AssistanceController (mobil) ------------
+        self._assist = AssistanceController(self.ui, self._log, self.map_ctrl)
+        core.mobile_request_added.connect(self._assist.on_request)
 
         # ------------ UI ↔ Map bağlantıları ------------
         self.ui.clearPath_pushButton.clicked.connect(self.map_ctrl.clear_path)
