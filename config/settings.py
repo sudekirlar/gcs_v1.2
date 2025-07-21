@@ -18,6 +18,7 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     return (
         CameraSource(name="Laptop Kamerası", path="0"),
         CameraSource(name="Test Videosu",    path="source_videos/test2.mp4"),
+        CameraSource(name="SIYI A8 (RTSP)", path="rtsp://192.168.144.25:8554/live"), #genel olarak buymuş ama güncellenecek.
     )
 
 
