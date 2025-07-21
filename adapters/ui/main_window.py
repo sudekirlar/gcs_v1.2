@@ -1,23 +1,26 @@
 # adapters/ui/main_window.py
-from PyQt5.QtWidgets           import QMainWindow
-from PyQt5.QtWebEngineWidgets  import QWebEngineView
+from __future__ import annotations
+
+from PyQt5.QtWidgets import QMainWindow, QApplication
+from PyQt5.QtWebEngineWidgets import QWebEngineView
 
 # ---------------- Controller'lar ----------------
-from adapters.ui.controllers.command_controller     import CommandController
-from adapters.ui.controllers.connection_controller  import ConnectionController
-from adapters.ui.controllers.telemetry_controller   import TelemetryController
-from adapters.ui.controllers.log_controller         import LogController
-from adapters.ui.controllers.map_controller         import MapController
-from adapters.ui.controllers.assistance_controller  import AssistanceController
-from adapters.ui.controllers.camera_controller      import CameraController
+from adapters.ui.controllers.command_controller    import CommandController
+from adapters.ui.controllers.connection_controller import ConnectionController
+from adapters.ui.controllers.telemetry_controller  import TelemetryController
+from adapters.ui.controllers.log_controller        import LogController
+from adapters.ui.controllers.map_controller        import MapController
+from adapters.ui.controllers.assistance_controller import AssistanceController
+from adapters.ui.controllers.camera_controller     import CameraController
 
 from newDesign import Ui_MainWindow
 from config.settings import Settings  # type hint
+from adapters.firebase.firebase_adapter import FirebaseAdapter
 
 
 class MainWindow(QMainWindow):
     """
-    View + Controller wiring (GCS + Kamera + Mobile).
+    View  +  Controller wiring (GCS + Kamera + Mobil).
     """
 
     def __init__(
@@ -27,9 +30,15 @@ class MainWindow(QMainWindow):
         camera_adapter,             # OpenCVAdapter
         logger,
         settings: Settings,
-        parent=None
+        fb_adapter: FirebaseAdapter,
+        parent=None,
     ):
         super().__init__(parent)
+
+        # ------------ Bağımlılıklar ------------
+        self._core = core          # GCS iş mantığı
+        self._log  = logger        # Logger (uygulama geneli)
+        self._fb   = fb_adapter    # Firebase adaptörü
 
         # ------------ UI yükle ------------
         self.ui = Ui_MainWindow()
@@ -53,46 +62,49 @@ class MainWindow(QMainWindow):
         placeholder.deleteLater()
 
         # ------------ AssistanceController (mobil) ------------
-        self._assist = AssistanceController(self.ui, logger)
+        self._assist = AssistanceController(self.ui, self._log)
         core.mobile_request_added.connect(self._assist.on_request)
+        self.ui.loadMission_pushButton.clicked.connect(self._deliver_aid)
 
         # ------------ Kamera Controller ------------
         self.cam_ctrl = CameraController(
             ui_widgets={
-                'open_btn'     : self.ui.openCamera_pushButton,
-                'close_btn'    : self.ui.closeCamera_pushButton,
-                'source_combo' : self.ui.videoCapture_comboBox,
-                'res_combo'    : self.ui.resolution_comboBox,
-                'display_label': self.ui.cameraShown_label,
+                "open_btn":     self.ui.openCamera_pushButton,
+                "close_btn":    self.ui.closeCamera_pushButton,
+                "source_combo": self.ui.videoCapture_comboBox,
+                "res_combo":    self.ui.resolution_comboBox,
+                "display_label": self.ui.cameraShown_label,
             },
-            core     = camera_core,
-            settings = settings,
-            parent   = self,
+            core=camera_core,
+            settings=settings,
+            parent=self,
         )
 
         # **Yüksek hacimli kare sinyali doğrudan UI controller'a**
         camera_adapter.new_frame.connect(self.cam_ctrl.update_display)
 
         # ------------ Diğer Controller'lar ------------
-        self.log_ctrl = LogController(self.log_panel, logger)
+        self.log_ctrl = LogController(self.log_panel, self._log)
         self.conn_ctrl = ConnectionController(
-            combo        = self.combo,
-            button       = self.connect_btn,
-            status_edit  = self.status_edit,
-            core         = core,
-            logger       = logger,
-            close_button = self.close_btn,
-            parent       = self)
+            combo=self.combo,
+            button=self.connect_btn,
+            status_edit=self.status_edit,
+            core=core,
+            logger=self._log,
+            close_button=self.close_btn,
+            parent=self,
+        )
 
         self.tel_ctrl = TelemetryController(self.telemetry_widgets, core, parent=self)
-        self.cmd_ctrl = CommandController(self.ui, core, logger, parent=self)
+        self.cmd_ctrl = CommandController(self.ui, core, self._log, parent=self)
 
         # MapController gerçek mapView ile bağlanıyor
         self.map_ctrl = MapController(
-            map_widget = self.mapView,
-            core       = core,
-            logger     = logger,
-            parent     = self)
+            map_widget=self.mapView,
+            core=core,
+            logger=self._log,
+            parent=self,
+        )
 
         # ------------ UI ↔ Map bağlantıları ------------
         self.ui.clearPath_pushButton.clicked.connect(self.map_ctrl.clear_path)
@@ -101,17 +113,30 @@ class MainWindow(QMainWindow):
         self.ui.goToFocus_pushButton.clicked.connect(self.map_ctrl.recenter_and_follow)
         self.ui.saveMission_pushButton.clicked.connect(self.map_ctrl.start_demo)
 
+    def closeEvent(self, event):  # <<<
+        self._log.info("Ana pencere kapanıyor – kapanış işlemleri tetiklendi.")
+        super().closeEvent(event)  # <<<
+
     # ------------ Widget kısayolları ------------
     @property
-    def combo(self):       return self.ui.comPortTelemetry_comboBox
+    def combo(self):
+        return self.ui.comPortTelemetry_comboBox
+
     @property
-    def connect_btn(self): return self.ui.openTelemetry_pushButton
+    def connect_btn(self):
+        return self.ui.openTelemetry_pushButton
+
     @property
-    def close_btn(self):   return self.ui.closeTelemetry_pushButton
+    def close_btn(self):
+        return self.ui.closeTelemetry_pushButton
+
     @property
-    def status_edit(self): return self.ui.currentState_textEdit_2
+    def status_edit(self):
+        return self.ui.currentState_textEdit_2
+
     @property
-    def log_panel(self):   return self.ui.criticalShown_textEdit
+    def log_panel(self):
+        return self.ui.criticalShown_textEdit
 
     @property
     def telemetry_widgets(self):
@@ -127,3 +152,15 @@ class MainWindow(QMainWindow):
             "mode":  self.ui.currentMode_textEdit,
         }
 
+    # ------------ Yardım Gönder ------------
+    def _deliver_aid(self):
+        """
+        'Görev Yükle' (Yardım Ulaştır) butonunun slot'u.
+        Seçili mobil isteği alır ve core'a iletir.
+        """
+        req = self._assist.get_selected_request()
+        if req:
+            self._log.info(f"[UI] Seçilen yardım isteği: {req}")
+            self._core.interrupt_mission_for_request(req)
+        else:
+            self._log.warning("Yardım gönderilemedi – seçim yapılmadı.")

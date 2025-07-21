@@ -1,3 +1,5 @@
+# core/assistance_request.py
+
 from dataclasses import dataclass
 
 # slots=True KALDIRILDI
