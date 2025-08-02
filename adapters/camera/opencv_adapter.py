@@ -66,6 +66,8 @@ class _CameraReaderProcess(multiprocessing.Process):
 
         cap.release(); log.info("Kamera kapatıldı.")
 
+        self._stop.set()  # Video kendi kendine bittiğinde stop sinyali
+
 
 class OpenCVAdapter(QObject):
     started = pyqtSignal(); stopped = pyqtSignal(str); failed = pyqtSignal(str)
