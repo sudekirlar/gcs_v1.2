@@ -164,3 +164,11 @@ class MainWindow(QMainWindow):
             self._core.interrupt_mission_for_request(req)
         else:
             self._log.warning("Yardım gönderilemedi – seçim yapılmadı.")
+
+    def update_camera_image(self, frame):
+        height, width, channel = frame.shape
+        bytes_per_line = 3 * width
+        qimg = QtGui.QImage(
+            frame.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888
+        ).rgbSwapped()
+        self.ui.cameraShown_label.setPixmap(QtGui.QPixmap.fromImage(qimg))

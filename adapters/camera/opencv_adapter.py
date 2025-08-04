@@ -50,23 +50,28 @@ class _CameraReaderProcess(multiprocessing.Process):
 
         while not self._stop.is_set():
             ok, frame = cap.read()
-            if not ok: break
+            if not ok:
+                break
 
             if self._cuda:
                 gpu_mat.upload(frame)
-                # gpu_mat = gpu_resize(gpu_mat,(self._w,self._h))
-                frame = gpu_mat.download()       # BGR olarak geri
+                frame = gpu_mat.download()  # BGR olarak geri
 
+            # ❗️Boyutu QLabel'e uygun hale getir
+            frame = cv2.resize(frame, (self._w, self._h))
+
+            # Kuyruğa ekle
             if self._q.full():
-                try: self._q.get_nowait()
-                except Exception: pass
-            try: self._q.put_nowait(frame)
-            except Exception: pass
+                try:
+                    self._q.get_nowait()
+                except Exception:
+                    pass
+            try:
+                self._q.put_nowait(frame)
+            except Exception:
+                pass
+
             time.sleep(0.001)
-
-        cap.release(); log.info("Kamera kapatıldı.")
-
-        self._stop.set()  # Video kendi kendine bittiğinde stop sinyali
 
 
 class OpenCVAdapter(QObject):
