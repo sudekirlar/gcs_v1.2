@@ -1,4 +1,3 @@
-# adapters/ui/controllers/assistance_controller.py
 from __future__ import annotations
 
 from PyQt5.QtCore import QObject, Qt
@@ -28,19 +27,25 @@ class AssistanceController(QObject):
         super().__init__(parent)
         self._ui = ui
         self._log = logger
-        self._requests = []
+        self._requests: list[AssistanceRequest] = []
 
-        # QTextEdit yerine QListWidget yerleştir
+        # Orijinal textEdit'i gizle
         self._ui.mobileBox_textEdit.setVisible(False)
-        self._list = QListWidget(self._ui.tab_7)
+
+        # Eğer main_window kullanılıyorsa 'tab_7' mevcut olacak
+        if hasattr(self._ui, 'tab_7') and getattr(self._ui, 'tab_7') is not None:
+            container = self._ui.tab_7
+            container.setStyleSheet("background: transparent;")
+        else:
+            # main_window2 senaryosu: doğrudan textEdit'in parent'ı
+            container = self._ui.mobileBox_textEdit.parent()
+
+        # Liste widget'ı oluştur ve yerleştir
+        self._list = QListWidget(container)
         self._list.setGeometry(self._ui.mobileBox_textEdit.geometry())
         self._list.setObjectName("mobileBox_listWidget")
-        self._list.setStyleSheet("""
-            background: transparent;
-            border: none;
-        """)
-        self._ui.tab_7.setStyleSheet("background: transparent;")
-        self._ui.mobileBox_listWidget = self._list  # UI dışından erişim için
+        self._list.setStyleSheet("background: transparent; border: none;")
+        setattr(self._ui, 'mobileBox_listWidget', self._list)
 
     def on_request(self, r: AssistanceRequest):
         desc = self._DESC_MAP.get(r.durum, "İhtiyaç: Bilinmeyen")
@@ -48,11 +53,9 @@ class AssistanceController(QObject):
         lat_txt = f"{abs(r.lat):.5f} {'N' if r.lat >= 0 else 'S'}"
         lon_txt = f"{abs(r.lon):.5f} {'E' if r.lon >= 0 else 'W'}"
 
-        # ✔ Tüm bilgileri içeren metin
         text = f"{desc}\nKonum: {lat_txt}, {lon_txt}\nTC: {r.tc}"
 
         item = QListWidgetItem()
-
         label = QLabel(text)
         label.setWordWrap(True)
         label.setAttribute(Qt.WA_TranslucentBackground)
@@ -61,14 +64,15 @@ class AssistanceController(QObject):
             background: transparent;
             padding: 5px;
             font-size: 12px;
-        """)
+        """
+        )
 
-        # Boyutu içeriğe göre ayarla
         label.adjustSize()
         item.setSizeHint(label.sizeHint())
 
         self._list.addItem(item)
         self._list.setItemWidget(item, label)
+        self._list.scrollToBottom()
 
         self._requests.append(r)
 
@@ -78,5 +82,3 @@ class AssistanceController(QObject):
             return self._requests[idx]
         self._log.warning("Yardım isteği seçilmedi.")
         return None
-
-
