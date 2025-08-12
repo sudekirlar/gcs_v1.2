@@ -55,6 +55,22 @@ class MessageParser(QObject):
                 )
             }
 
+        elif t == "SYS_STATUS":
+            # ArduPilot: mV, 10mA, %, -1 → bilinmiyor
+            pct = msg.battery_remaining
+            v_mv = msg.voltage_battery
+            a_10ma = msg.current_battery
+
+            d = {}
+            if pct is not None and pct >= 0:
+                # Gürültüyü azalt: int yüzde
+                d["bat_pct"] = int(round(float(pct)))
+            if v_mv is not None and v_mv > 0:
+                # 0.1 V çözünürlük yeterli (UI flood'u keser)
+                d["bat_v"] = round(v_mv / 1000.0, 1)
+            if a_10ma is not None and a_10ma > 0:
+                d["bat_a"] = round(a_10ma / 100.0, 2)  # Amper
+
         # ----------------- Diff filtresi -----------------
         if not d:
             return

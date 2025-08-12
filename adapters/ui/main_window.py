@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from PyQt5.QtWidgets import QMainWindow, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.uic.properties import QtGui
 
 # ---------------- Controller'lar ----------------
 from adapters.ui.controllers.command_controller    import CommandController
@@ -150,6 +151,7 @@ class MainWindow(QMainWindow):
             "spd":   self.ui.speed_textEdit,
             "hdop":  self.ui.hdop_textEdit,
             "mode":  self.ui.currentMode_textEdit,
+            "bat": self.ui.progressBar,
         }
 
     # ------------ Yardım Gönder ------------
