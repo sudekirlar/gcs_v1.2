@@ -30,6 +30,7 @@ class MapController(QObject):
         self._t = QTimer(self, interval=80, singleShot=True)
         self._t.timeout.connect(self._flush)
         core.telemetry_updated.connect(self._on_tel)
+        core.mobile_request_added.connect(self.on_mobile_request)
 
         html = locate_map_html()
         self._v.load(QUrl.fromLocalFile(str(html)))
@@ -58,6 +59,19 @@ class MapController(QObject):
             self._log.warning("[Map] Konum yok – marker eklenmedi"); return
         mkid = f"mk_{int(time.time())}"
         self._pg.runJavaScript(f"addMarker({lon}, {lat}, '{mkid}')")
+
+    # Mobil istek, haritaya özel ikonlu marker ekle
+    @pyqtSlot(object)  # AssistanceRequest
+    def on_mobile_request(self, r):
+        try:
+            mkid = f"mob_{r.tc}_{int(time.time())}"
+            # JS: addMobileMarker(lon, lat, id)
+            self._pg.runJavaScript(
+                f"addMobileMarker({float(r.lon)}, {float(r.lat)}, '{mkid}')"
+            )
+            self._log.info(f"[Map] Mobil marker eklendi: {mkid}")
+        except Exception as e:
+            self._log.warning(f"[Map] Mobil marker eklenemedi: {e}")
 
     def clear_markers(self):
         self._pg.runJavaScript("clearMarkers()")

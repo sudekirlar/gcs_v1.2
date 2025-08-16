@@ -1,9 +1,9 @@
 /* map/ map.js */
 /* =====================================================================
    GCS Web Map  –  OpenLayers 9.1
-   • Dinamik-Zoom: polyline + drone ikonu kadraja sığar
+   • Dinamik-Zoom: drone + iz + (takip grubundaki) mobil marker’lar kadraja sığar
    • Kullanıcı etkileşimi → auto-follow anında kapanır
-   • goToFocus_pushButton  → auto-follow yeniden açılır (recenterAndFollow)
+   • goToFocus_pushButton → her durumda (açıksa/kapalıysa) taze fit (recenterAndFollow)
    • Demo uçuş: HOME etrafında canlı daire
  ===================================================================== */
 
@@ -14,7 +14,7 @@ const ll   = (lo, la) => ol.proj.fromLonLat([lo, la]);
 /* ---------- Küresel objeler ---------- */
 let map, view, vectorSrc, droneF, pathF;
 let autoFollow = false;
-// DEĞİŞİKLİK 1: "İlk paket" durumunu yönetmek için yeni bir bayrak
+// "İlk paket" durumunu yönetmek için bayrak
 let isFirstPacket = true;
 
 /* ---------- WebChannel & kurulum ---------- */
@@ -41,12 +41,14 @@ function initMap() {
       rotateWithView: true
     })
   }));
+  droneF.set('fitGroup', 'follow');   // dinamik kadraj grubunda
 
   /* Polyline */
   pathF = new ol.Feature(new ol.geom.LineString([]));
   pathF.setStyle(new ol.style.Style({
     stroke: new ol.style.Stroke({ color:'#1E90FF', width:3 })
   }));
+  pathF.set('fitGroup', 'follow');    // dinamik kadraj grubunda
 
   vectorSrc.addFeatures([droneF, pathF]);
 
@@ -61,14 +63,31 @@ function initMap() {
     view:view
   });
 
-  /* DEĞİŞİKLİK 2: Olay dinleyiciyi daha akıllı hale getiriyoruz.
-     Programatik hareketlerin (fit, setCenter) `movestart` olayını
-     tetikleyip döngüye girmesini engellemek için. */
+  // Kullanıcı haritayı oynatırsa auto-follow’u kapat
   map.on('pointerdown', () => {
     if (autoFollow) {
-        disableAutoFollow();
+      disableAutoFollow();
     }
   });
+}
+
+/* =====================================================================
+   Ortak: follow grubunun tamamını kadraja sığdır
+ ===================================================================== */
+function fitFollowExtent(skipAnim) {
+  const ext = [Infinity, Infinity, -Infinity, -Infinity];
+  vectorSrc.getFeatures().forEach(f => {
+    if (f.get('fitGroup') === 'follow' && f.getGeometry()) {
+      ol.extent.extend(ext, f.getGeometry().getExtent());
+    }
+  });
+  if (ext[0] !== Infinity) {
+    view.fit(ext, {
+      padding:[80,80,80,80],
+      maxZoom:18,
+      duration: skipAnim ? 0 : 250
+    });
+  }
 }
 
 /* =====================================================================
@@ -84,29 +103,34 @@ function updateDrone(p) {
   /* Polyline noktası */
   pathF.getGeometry().appendCoordinate(coord);
 
-  // DEĞİŞİKLİK 3: "İlk paket" mantığını düzeltiyoruz.
-  // Bu blok sadece bir kere çalışacak.
+  // İlk paket geldiyse auto-follow’u aç ve taze fit yap (animasyonsuz)
   if (isFirstPacket) {
-    enableAutoFollow(true); // Auto-follow'u başlat
-    isFirstPacket = false;  // Ve bu bayrağı kalıcı olarak kapat
+    enableAutoFollow(true);
+    isFirstPacket = false;
   }
 
-  /* Eğer auto-follow açık ise fit/center işlemleri */
+  /* Auto-follow açıkken dinamik kadraj yönetimi */
   if (autoFollow) {
     dynamicFit(coord);
   }
 }
 
 function dynamicFit(coord) {
-  const ext = pathF.getGeometry().getExtent().slice();
-  ol.extent.extend(ext, droneF.getGeometry().getExtent());
+  // follow grubundaki tüm feature’ları kadraja al
+  const ext = [Infinity, Infinity, -Infinity, -Infinity];
+  vectorSrc.getFeatures().forEach(f => {
+    if (f.get('fitGroup') === 'follow' && f.getGeometry()) {
+      ol.extent.extend(ext, f.getGeometry().getExtent());
+    }
+  });
 
-  const viewExt = view.calculateExtent(map.getSize());
-  const polyInView = ol.extent.containsExtent(viewExt, ext);
+  const viewExt   = view.calculateExtent(map.getSize());
+  const allInView = ol.extent.containsExtent(viewExt, ext);
 
-  if (!polyInView) {
+  if (!allInView) {
     view.fit(ext, { padding:[80,80,80,80], maxZoom:18, duration:250 });
   } else {
+    // Hepsi kadrajda ama drone merkezden çıktıysa küçük bir center animasyonu
     if (!ol.extent.containsCoordinate(viewExt, coord)) {
       view.animate({ center: coord, duration: 250 });
     }
@@ -117,27 +141,25 @@ function dynamicFit(coord) {
    Auto-follow kontrol
  ===================================================================== */
 function enableAutoFollow(skipAnim) {
-  if (autoFollow) return; // Zaten açıksa bir şey yapma
-  autoFollow = true;
-  backend.onDynamicZoomChanged?.(true);
-
-  const ext = pathF.getGeometry().getExtent().slice();
-  ol.extent.extend(ext, droneF.getGeometry().getExtent());
-  // Extent'in geçerli olduğundan emin ol (polyline boş değilse)
-  if (ext[0] !== Infinity) {
-      view.fit(ext, { padding:[80,80,80,80], maxZoom:18, duration:skipAnim?0:250 });
+  // Açık değilse aç; açıksa da taze bir fit uygula
+  if (!autoFollow) {
+    autoFollow = true;
+    backend.onDynamicZoomChanged?.(true);
   }
+  fitFollowExtent(!!skipAnim);
 }
 
 function disableAutoFollow() {
-  if (!autoFollow) return; // Zaten kapalıysa bir şey yapma
+  if (!autoFollow) return;
   autoFollow = false;
   backend.onDynamicZoomChanged?.(false);
 }
 
 /* Python’daki goToFocus_pushButton bu fonksiyonu çağırır */
-function recenterAndFollow() { enableAutoFollow(false); }
-
+function recenterAndFollow() {
+  // Focus: auto-follow’u aç ve follow grubunu DERHAL kadraja sığdır
+  enableAutoFollow(false);
+}
 
 /* =====================================================================
    Marker & Polyline yardımcıları (butonlar için)
@@ -148,14 +170,38 @@ function addMarker(lon, lat, id) {
   m.setStyle(new ol.style.Style({
     image:new ol.style.Icon({
       src:'../assets/normal_marker.png',
-      anchor:[0.5,1], scale:0.10 })
+      anchor:[0.5,1],
+      scale:0.10
+    })
   }));
   vectorSrc.addFeature(m);
 }
 
+// Mobil bildirim marker’ı (özel ikon + follow grubuna dahil)
+function addMobileMarker(lon, lat, id) {
+  const f = new ol.Feature(new ol.geom.Point(ll(lon, lat)));
+  f.setId(id);
+  f.set('fitGroup', 'follow');  // dinamik kadrajın parçası olsun
+  f.setStyle(new ol.style.Style({
+    image:new ol.style.Icon({
+      src:'../assets/mobile_marker.png',
+      anchor:[0.5,1],
+      scale:0.12
+    })
+  }));
+  vectorSrc.addFeature(f);
+
+  // Auto-follow açıksa follow grubunun tamamına taze fit
+  if (autoFollow) {
+    fitFollowExtent(false);
+  }
+}
+
 function clearMarkers() {
-  vectorSrc.getFeatures().forEach(f=>{
-    if (f !== droneF && f !== pathF) vectorSrc.removeFeature(f);
+  vectorSrc.getFeatures().forEach(f => {
+    if (f !== droneF && f !== pathF) {
+      vectorSrc.removeFeature(f);
+    }
   });
 }
 
@@ -171,10 +217,10 @@ let demoTimer = null;
 function startDemoFlight() {
   if (demoTimer) return;
   const R = 90, N = 120;
-  const dl = R / 111320;
-  const dln= R / (111320*Math.cos(HOME.lat*Math.PI/180));
-  const pts=[];
-  for (let i=0;i<=N;i++) {
+  const dl  = R / 111320;
+  const dln = R / (111320*Math.cos(HOME.lat*Math.PI/180));
+  const pts = [];
+  for (let i=0; i<=N; i++) {
     const t = 2*Math.PI*i/N;
     pts.push({
       lon: HOME.lon + dln*Math.cos(t),
@@ -185,11 +231,13 @@ function startDemoFlight() {
   isFirstPacket = true; // Demo başladığında ilk paket bayrağını sıfırla
   clearPolyline();
   let k = 0;
-  demoTimer = setInterval(()=>{
+  demoTimer = setInterval(() => {
     if (k >= pts.length) {
-      clearInterval(demoTimer); demoTimer=null;
-      backend.onDemoFinished?.(); return;
+      clearInterval(demoTimer);
+      demoTimer = null;
+      backend.onDemoFinished?.();
+      return;
     }
     updateDrone(pts[k++]);
-  }, 200);      // 5 Hz
+  }, 200); // 5 Hz
 }
