@@ -1,7 +1,7 @@
 # config/settings.py
 from __future__ import annotations
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,3 +54,17 @@ class Settings(BaseSettings):
         # env_prefix=""  # istersen tüm env’lere ortak prefix ekleyebilirsin
         extra="forbid"   # bilinmeyen env değişkenlerini reddetmeye devam eder
     )
+
+    # ----- Sistem Bilgileri / Hava Durumu -----
+    weather_enabled: bool = True
+    weather_timeout_sec: int = 3
+
+    # Güvenlik tercihleri
+    use_device_location: bool = True  # OS/driver üzerinden konum (tercih edilen)
+    use_ip_location: bool = False  # IP lookup’u tamamen kapatır (güvenli varsayılan)
+
+    # ENV fallback (opsiyonel sabit konum)
+    default_lat: Optional[float] = None
+    default_lon: Optional[float] = None
+    default_city: Optional[str] = None
+

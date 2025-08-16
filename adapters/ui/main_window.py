@@ -17,7 +17,7 @@ from adapters.ui.controllers.camera_controller     import CameraController
 from newDesign import Ui_MainWindow
 from config.settings import Settings  # type hint
 from adapters.firebase.firebase_adapter import FirebaseAdapter
-
+from adapters.ui.controllers.system_info_controller import SystemInfoController
 
 class MainWindow(QMainWindow):
     """
@@ -113,6 +113,17 @@ class MainWindow(QMainWindow):
         self.ui.clearMarker_pushButton.clicked.connect(self.map_ctrl.clear_markers)
         self.ui.goToFocus_pushButton.clicked.connect(self.map_ctrl.recenter_and_follow)
         self.ui.saveMission_pushButton.clicked.connect(self.map_ctrl.start_demo)
+
+        self.sys_ctrl = SystemInfoController(
+            time_label=self.ui.time_label,
+            date_label=self.ui.date_label,
+            weather_label=self.ui.weather_label,
+            settings=settings,
+            logger=self._log,
+            parent=self,
+        )
+        self.sys_ctrl.start()
+
 
     def closeEvent(self, event):  # <<<
         self._log.info("Ana pencere kapanıyor – kapanış işlemleri tetiklendi.")
