@@ -11,3 +11,4 @@ logs/gcs.log
 config/firebase_key.json
 records
 records/
+tests/camera_test.py
