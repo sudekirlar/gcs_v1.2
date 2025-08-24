@@ -96,15 +96,26 @@ class GCSCore(QObject):
     # UI → “Göreve Ara” butonu çağırır
     # -----------------------------------------------------------------
     def interrupt_mission_for_request(self, req: AssistanceRequest):
-        if self._mode != "AUTO":
-            self._log.warning("Görev kesilemedi: Drone AUTO modda değil")
-            return
+        # ESKİ KISIT ((TEST İÇİN))
+        # if self._mode != "AUTO":
+        #     self._log.warning("Görev kesilemedi: Drone AUTO modda değil")
+        #     return
 
         self._pending_req = req
         self._pending_alt = max(self._current_alt, 5.0)  # güvenli irtifa
-        self._awaiting_guided = True
 
-        self._log.info("♦ Adım 1: GUIDED moda geç komutu gönderildi")
+        # Zaten GUIDED ise beklemeden doğrudan hedefe git
+        if self._mode == "GUIDED":
+            self._log.info("♦ Zaten GUIDED: NAV_WAYPOINT gönderiliyor (mobil hedef)")
+            self._mav.goto(req.lat, req.lon, self._pending_alt)
+            # pending state’i temizlemeyi de istersen aç:
+            # self._pending_req = None
+            # self._awaiting_guided = False
+            return
+
+        # Değilse, GUIDED'e geçişi tetikle ve _on_telemetry içinde goto atılsın
+        self._awaiting_guided = True
+        self._log.info("♦ Adım 1: GUIDED moda geç komutu gönderildi (her moddan izinli)")
         self.set_mode("GUIDED")
 
     # =================================================================
