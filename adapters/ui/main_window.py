@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
             ui_widgets={
                 "open_btn":     self.ui.openCamera_pushButton,
                 "close_btn":    self.ui.closeCamera_pushButton,
+                "snapshot_btn": self.ui.snapshoot_pushButton,
                 "source_combo": self.ui.videoCapture_comboBox,
                 "res_combo":    self.ui.resolution_comboBox,
                 "display_label": self.ui.cameraShown_label,
@@ -125,9 +126,12 @@ class MainWindow(QMainWindow):
         self.sys_ctrl.start()
 
 
-    def closeEvent(self, event):  # <<<
+    def closeEvent(self, event):
         self._log.info("Ana pencere kapanıyor – kapanış işlemleri tetiklendi.")
-        super().closeEvent(event)  # <<<
+        # GÜNCELLENDİ: CameraController'daki thread'leri güvenle kapat
+        if hasattr(self, 'cam_ctrl'):
+            self.cam_ctrl.cleanup()
+        super().closeEvent(event)
 
     # ------------ Widget kısayolları ------------
     @property

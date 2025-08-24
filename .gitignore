@@ -9,3 +9,5 @@ logs/gcs.log
 *.pt
 *.pyc
 config/firebase_key.json
+records
+records/
