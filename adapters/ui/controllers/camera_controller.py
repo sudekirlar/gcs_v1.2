@@ -8,7 +8,7 @@ UI ► CameraController ◄ CameraCore
 
 import time
 from collections import deque
-from typing import Dict
+from typing import Dict, Union
 import os
 from datetime import datetime
 import logging
@@ -213,17 +213,32 @@ class CameraController(QObject):
     #   Frame işleme & gösterme
     # ==============================================================
     @pyqtSlot(object)
-    def update_display(self, frame: np.ndarray):
+    # YENİ: Python 3.9 ve altı ile uyumlu tip bildirimi
+    def update_display(self, frame: Union[np.ndarray, None]):
+        """
+        Gelen kareyi işler. Kare 'None' ise bağlantı kopma durumunu yönetir.
+        """
         if frame is None:
+            if self._is_recording:
+                self._stop_recording()
+
+            lbl = self._ui['display_label']
+            lbl.clear()
+            lbl.setText("Sinyal Yok / Yeniden Bağlanılıyor...")
+            lbl.setAlignment(Qt.AlignCenter)
+
+            self._ts_hist.clear()
+            self._last_ts = None
+
             return
 
-        # YENİ: Kareyi kayda gönder (overlay çizilmeden önceki ham hali)
+        if self._ui['display_label'].text():
+            self._ui['display_label'].clear()
+            self._ui['display_label'].setAlignment(Qt.AlignLeft | Qt.AlignTop)
+
         if self._is_recording:
-            # frame.copy() kullanmak, farklı thread'lerin aynı veri üzerinde
-            # çakışmasını önlemek için en güvenli yoldur.
             self.frame_to_record_signal.emit(frame.copy())
 
-        # ----- FPS hesapla (Bu kısım değişmedi) -----
         now = time.time()
         if self._last_ts is not None:
             self._ts_hist.append(now - self._last_ts)
@@ -236,12 +251,10 @@ class CameraController(QObject):
         else:
             fps = ms = 0.0
 
-        # ----- QPixmap oluştur (BGR→RGB) (Bu kısım değişmedi) -----
         h, w, ch = frame.shape
         img = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888).rgbSwapped()
         pix = QPixmap.fromImage(img)
 
-        # ----- QLabel alanına oran/kırp (Bu kısım değişmedi) -----
         lbl_size = self._ui['display_label'].size()
         scaled = pix.scaled(
             lbl_size,
@@ -254,11 +267,9 @@ class CameraController(QObject):
             x_off, y_off, lbl_size.width(), lbl_size.height()
         )
 
-        # ----- FPS overlay KIRPILMIŞ pixmap’e çiz (Bu kısım değişmedi) -----
         painter = QPainter(cropped)
         painter.setRenderHint(QPainter.TextAntialiasing)
         painter.setFont(QFont("Consolas", 10, QFont.Bold))
-
         txt = f"{fps:4.0f} fps  {ms:3.0f} ms"
         painter.setPen(QPen(QColor(0, 0, 0), 2))
         painter.drawText(6, 16, txt)
