@@ -3,8 +3,10 @@
 Process-tabanlı OpenCV GStreamer adaptörü (Windows).
 – Kaynak GStreamer pipeline olarak gelir (Settings.camera_sources).
 – Decoder seçimi: decodebin + FEATURE_RANK ile NVDEC (nvh264dec) > avdec_h264.
-– GPU varsa: OpenCV-CUDA ile opsiyonel upload/resize → host’a geri.
-– UI tarafı RGB dönüşümü QImage.rgbSwapped() ile yapar.
+– Bu sürümde "sağlamlaştırma" eklendi:
+    1) Başlangıç zaman aşımı (20s içinde ilk kare gelmezse)
+    2) Yayın kesilmesi tespiti (10s kare yoksa)
+    3) Net hata nedenleri (failed(reason))
 """
 
 from __future__ import annotations
@@ -25,15 +27,16 @@ class _CameraReaderProcess(multiprocessing.Process):
     def __init__(
         self,
         source: str,                        # GStreamer pipeline STRING
-        resolution_wh: Tuple[int, int],     # QLabel’e uydurmak için post-resize
+        resolution_wh: Tuple[int, int],     # QLabel’e uydurmak için post-resize (UI zaten ölçekler)
         frame_q: multiprocessing.Queue,
+        reason_q: multiprocessing.Queue,     # NEW: süreçten neden bilgisi
         stop_event: multiprocessing.Event,
         use_cuda: bool,
         log_level: str = "INFO",
     ):
         super().__init__(name="CameraReader")
         self._src, (self._w, self._h) = source, resolution_wh
-        self._q, self._stop, self._cuda = frame_q, stop_event, use_cuda
+        self._q, self._rq, self._stop, self._cuda = frame_q, reason_q, stop_event, use_cuda
         self._log_level = log_level
 
     def _setup_gstreamer_env(self, log: logging.Logger) -> None:
@@ -65,6 +68,14 @@ class _CameraReaderProcess(multiprocessing.Process):
         except Exception as e:
             log.warning(f"[GST] FEATURE_RANK ayarlanamadı: {e}")
 
+    def _send_reason(self, reason: str) -> None:
+        """UI’ya net mesaj geçmek için (non-blocking)."""
+        try:
+            if self._rq is not None:
+                self._rq.put_nowait(reason)
+        except Exception:
+            pass
+
     def run(self):
         logging.basicConfig(
             level=getattr(logging, self._log_level, logging.INFO),
@@ -72,7 +83,8 @@ class _CameraReaderProcess(multiprocessing.Process):
         )
         log = logging.getLogger("cam.reader")
 
-        os.environ["GST_DEBUG"] = "3"  # 2 = INFO seviyesi, 3 yaparsan çok daha detaylı
+        # GStreamer debug’u üretimde kapalı tutmak daha iyi
+        # os.environ["GST_DEBUG"] = "3"
 
         self._setup_gstreamer_env(log)
 
@@ -84,6 +96,7 @@ class _CameraReaderProcess(multiprocessing.Process):
         cap = cv2.VideoCapture(self._src, cv2.CAP_GSTREAMER)
         if not cap.isOpened():
             log.error("GStreamer pipeline AÇILAMADI. Pipeline / kurulum / ağ parametrelerini kontrol et.")
+            self._send_reason("Pipeline açılamadı")
             return
 
         log.info("Pipeline açıldı; decodebin NVDEC'i tercih edecek, yoksa avdec'e düşecek.")
@@ -96,38 +109,37 @@ class _CameraReaderProcess(multiprocessing.Process):
                 log.warning(f"CUDA GpuMat oluşturulamadı, CPU moduna düşülüyor. Detay: {e}")
                 self._cuda = False
 
-        last_ok = True
+        # ---- Liveness (yayın kesilmesi) izlemesi ----
+        last_success = time.perf_counter()
+        LIVENESS_TIMEOUT = 10.0  # sn
+
+        last_warn = 0.0
         try:
             while not self._stop.is_set():
                 t0 = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok or frame is None:
-                    if last_ok:
-                        log.warning("Frame alınamadı (geçici). Akış bekleniyor…")
-                    last_ok = False
+                    now = time.perf_counter()
+                    # Yayın kesilmesi kontrolü
+                    if (now - last_success) > LIVENESS_TIMEOUT:
+                        log.error(f"Yayından {LIVENESS_TIMEOUT} saniyedir kare alınamıyor. Yayın kesildi varsayılıyor.")
+                        self._send_reason(f"Yayın kesildi ({int(LIVENESS_TIMEOUT)}s)")
+                        break
+                    # Sık log basma
+                    if (now - last_warn) > 2.0:
+                        log.warning("Frame alınamadı (geçici). Akış/EOS bekleniyor…")
+                        last_warn = now
                     time.sleep(0.01)
                     continue
 
-                last_ok = True
+                # Başarılı okuma → liveness timer’ı güncelle
+                last_success = time.perf_counter()
 
-                # (Opsiyonel) OpenCV-CUDA işleme
-                if self._cuda and gpu_mat is not None:
-                    try:
-                        gpu_mat.upload(frame)
-                        # gerekirse burada CUDA resize/filtre ekleyebilirsin
-                        frame = gpu_mat.download()  # BGR
-                    except Exception as e:
-                        log.error(f"CUDA işleminde hata. CPU’ya düşüyorum. Detay: {e}")
-                        self._cuda = False
+                # (İsteğe bağlı) OpenCV-CUDA burada gerçek işlem yapacaksan kullanılmalı;
+                # yalnızca upload/download yapmak gereksizdir. Şimdilik hiç dokunmuyoruz.
 
-                # QLabel alanına uygun post-resize (CPU)
-                if (frame.shape[1] != self._w) or (frame.shape[0] != self._h):
-                    try:
-                        frame = cv2.resize(frame, (self._w, self._h), interpolation=cv2.INTER_AREA)
-                    except Exception:
-                        pass
-
-                # Kuyruğa en güncel kare – doluysa eskisini at
+                # Process içinde resize/conversion YOK (UI ölçekler)
+                # Kuyruğa en taze kare – doluysa eskisini at
                 if self._q.full():
                     try:
                         self._q.get_nowait()
@@ -156,19 +168,24 @@ class OpenCVAdapter(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal(str)
     failed  = pyqtSignal(str)
-    new_frame = pyqtSignal(object)   # numpy.ndarray (BGR)
+    new_frame = pyqtSignal(object)   # numpy.ndarray (BGR/BGRA)
 
     def __init__(self, logger: ILoggerPort, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._log: ILoggerPort = logger
         self._proc: Optional[multiprocessing.Process] = None
         self._q: Optional[multiprocessing.Queue] = None
+        self._reason_q: Optional[multiprocessing.Queue] = None  # NEW
         self._stop_evt: Optional[multiprocessing.Event] = None
 
         # Ana döngüde kuyruğu poll eden timer (~60 Hz)
         self._poll = QTimer(self)
         self._poll.setInterval(16)
         self._poll.timeout.connect(self._poll_q)
+
+        # Başlangıç zaman aşımı (ilk kare bekleme)
+        self._startup_timeout_timer: Optional[QTimer] = None
+        self._first_frame_seen: bool = False
 
         self._cuda = _cuda_available()
         if self._cuda:
@@ -194,15 +211,16 @@ class OpenCVAdapter(QObject):
             self.failed.emit("Çözünürlük")
             return
 
-        # Pipeline string beklenir; numeric kamera index desteklemiyoruz
-        self._q = multiprocessing.Queue(maxsize=2)
+        # Pipeline string beklenir
+        self._q = multiprocessing.Queue(maxsize=1)          # düşük gecikme için 1
+        self._reason_q = multiprocessing.Queue(maxsize=4)   # NEW: neden mesajları
         self._stop_evt = multiprocessing.Event()
 
         log_level = "INFO"
 
         # Process’i başlat
         self._proc = _CameraReaderProcess(
-            src, (w, h), self._q, self._stop_evt, self._cuda, log_level=log_level
+            src, (w, h), self._q, self._reason_q, self._stop_evt, self._cuda, log_level=log_level
         )
         self._proc.daemon = True
         try:
@@ -211,6 +229,14 @@ class OpenCVAdapter(QObject):
             self._log.error(f"[Cam] Kamera süreci başlatılamadı: {e}")
             self.failed.emit("Process")
             return
+
+        # Başlangıç zaman aşımı: 20s içinde ilk kare gelmezse
+        if self._startup_timeout_timer is None:
+            self._startup_timeout_timer = QTimer(self)
+            self._startup_timeout_timer.setSingleShot(True)
+            self._startup_timeout_timer.timeout.connect(self._on_startup_timeout)
+        self._first_frame_seen = False
+        self._startup_timeout_timer.start(20000)  # 20,000 ms
 
         self._poll.start()
         self.started.emit()
@@ -222,6 +248,13 @@ class OpenCVAdapter(QObject):
         try:
             if self._stop_evt:
                 self._stop_evt.set()
+        except Exception:
+            pass
+
+        # Startup timeout timer’ını kapat (varsa)
+        try:
+            if self._startup_timeout_timer and self._startup_timeout_timer.isActive():
+                self._startup_timeout_timer.stop()
         except Exception:
             pass
 
@@ -237,7 +270,17 @@ class OpenCVAdapter(QObject):
         self._poll.stop()
         self._log.info("[Cam] Kamera sürecinin kapanması bekleniyor…")
 
-    # -------------- internal helpers --------------
+    # -------------- callbacks & helpers --------------
+    def _on_startup_timeout(self):
+        """20s boyunca ilk kare gelmediyse başarısız say."""
+        if self._first_frame_seen:
+            return
+        if self._proc and self._proc.is_alive():
+            self._log.error("[Cam] Kamera başlatma zaman aşımına uğradı (20s).")
+            # Temiz kapat ve UI’ya net mesaj ver
+            self.stop()
+            self.failed.emit("Başlatılamadı: Zaman Aşımı")
+
     def _check_proc_end(self):
         if not self._proc:
             if self._wait_tmr:
@@ -268,6 +311,7 @@ class OpenCVAdapter(QObject):
 
         self._proc = None
         self._q = None
+        self._reason_q = None
         self._stop_evt = None
         self.stopped.emit(reason)
         self._log.info(f"[Cam] Kamera adaptörü durdu: {reason}")
@@ -276,7 +320,25 @@ class OpenCVAdapter(QObject):
         if not self._q:
             return
 
-        # Süreç çöktü + sırada kare yoksa → failed
+        # Önce süreçten gelen "neden" mesajlarını boşalt (varsa)
+        if self._reason_q is not None:
+            while True:
+                try:
+                    reason = self._reason_q.get_nowait()
+                except pyqueue.Empty:
+                    break
+                except Exception:
+                    break
+                else:
+                    # Süreç hata bildiriyor → UI’ya yansıt ve kapat
+                    try:
+                        self.failed.emit(str(reason))
+                    finally:
+                        # Süreç hâlâ yaşıyor olabilir; nazikçe durdur
+                        self.stop()
+                        return
+
+        # Süreç çöktüyse ve sırada kare yoksa → failed
         if self._proc and (not self._proc.is_alive()) and self._q.empty():
             self._poll.stop()
             self.failed.emit("Kamera süreci bitti")
@@ -293,4 +355,9 @@ class OpenCVAdapter(QObject):
                 break
 
         if last is not None:
+            # İlk kare geldiyse startup timeout’u iptal et
+            if (self._startup_timeout_timer is not None) and self._startup_timeout_timer.isActive():
+                self._startup_timeout_timer.stop()
+            self._first_frame_seen = True
+
             self.new_frame.emit(last)
