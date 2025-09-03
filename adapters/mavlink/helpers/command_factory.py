@@ -1,3 +1,5 @@
+# adapters/mavlink/helpers/command_factory.py
+
 """
 Process-tarih: 2025-07-19 rev.4
 • GOTO komutu MAV_CMD_NAV_WAYPOINT ile gönderiliyor

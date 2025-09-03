@@ -6,7 +6,7 @@ Process-tabanlı OpenCV adaptörü (CUDA opsiyonlu).
 """
 
 from __future__ import annotations
-import cv2, time, logging, multiprocessing
+import cv2, time, logging, multiprocessing, queue as pyqueue
 from typing import Optional, Tuple
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from core.ports.logger_port import ILoggerPort
@@ -15,7 +15,7 @@ from core.ports.logger_port import ILoggerPort
 def _cuda_available() -> bool:
     try:
         return cv2.cuda.getCudaEnabledDeviceCount() > 0
-    except AttributeError:
+    except Exception:
         return False
 
 
@@ -38,87 +38,169 @@ class _CameraReaderProcess(multiprocessing.Process):
         log = logging.getLogger("cam.reader")
         log.info(f"CUDA {'ON' if self._cuda else 'OFF'}")
 
+        # Kaynak aç
         cap = cv2.VideoCapture(int(self._src)) if str(self._src).isdigit() else cv2.VideoCapture(self._src)
         if not cap.isOpened():
-            log.error(f"Kamera açılamadı: {self._src}"); return
+            log.error(f"Kamera açılamadı: {self._src}")
+            return
+
+        # Hedef çözünürlüğü iste
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self._w)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._h)
 
+        gpu_mat = None
         if self._cuda:
-            gpu_mat = cv2.cuda_GpuMat()
-            # gpu_resize = cv2.cuda.resize  # gelecekte gerekirse
+            try:
+                gpu_mat = cv2.cuda_GpuMat()
+            except Exception:
+                log.warning("CUDA GpuMat oluşturulamadı, CPU moduna düşülüyor.")
+                self._cuda = False
 
-        while not self._stop.is_set():
-            ok, frame = cap.read()
-            if not ok:
-                break
+        try:
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    time.sleep(0.01)
+                    continue
 
-            if self._cuda:
-                gpu_mat.upload(frame)
-                frame = gpu_mat.download()  # BGR olarak geri
+                if self._cuda and gpu_mat is not None:
+                    try:
+                        gpu_mat.upload(frame)
+                        # Gerekirse burada CUDA resize/blur vb. uygulanabilir
+                        frame = gpu_mat.download()  # BGR
+                    except Exception:
+                        # GPU’da sorun olursa CPU’ya düş
+                        self._cuda = False
 
-            # ❗️Boyutu QLabel'e uygun hale getir
-            frame = cv2.resize(frame, (self._w, self._h))
+                # QLabel’e uygun boyut
+                if (frame.shape[1] != self._w) or (frame.shape[0] != self._h):
+                    try:
+                        frame = cv2.resize(frame, (self._w, self._h))
+                    except Exception:
+                        pass
 
-            # Kuyruğa ekle
-            if self._q.full():
+                # Kuyruğa son kareyi koy, doluysa en eskisini at
+                if self._q.full():
+                    try:
+                        self._q.get_nowait()
+                    except Exception:
+                        pass
                 try:
-                    self._q.get_nowait()
+                    self._q.put_nowait(frame)
                 except Exception:
                     pass
+
+                # Çok agresif olmayan sıkılık
+                time.sleep(0.001)
+        finally:
             try:
-                self._q.put_nowait(frame)
+                cap.release()
             except Exception:
                 pass
-
-            time.sleep(0.001)
+            log.info("Kamera süreci kapandı.")
 
 
 class OpenCVAdapter(QObject):
-    started = pyqtSignal(); stopped = pyqtSignal(str); failed = pyqtSignal(str)
+    started = pyqtSignal()
+    stopped = pyqtSignal(str)
+    failed  = pyqtSignal(str)
     new_frame = pyqtSignal(object)   # numpy.ndarray (BGR)
 
     def __init__(self, logger: ILoggerPort, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self._log = logger
-        self._proc = None; self._q = None; self._stop_evt = None
-        self._poll = QTimer(self, interval=16); self._poll.timeout.connect(self._poll_q)
+        self._log: ILoggerPort = logger
+        self._proc: Optional[multiprocessing.Process] = None
+        self._q: Optional[multiprocessing.Queue] = None
+        self._stop_evt: Optional[multiprocessing.Event] = None
+
+        # Ana döngüde kuyruğu poll eden timer
+        self._poll = QTimer(self)
+        self._poll.setInterval(16)  # ~60 Hz
+        self._poll.timeout.connect(self._poll_q)
+
         self._cuda = _cuda_available()
-        if self._cuda: self._log.info("[Cam] CUDA destekli OpenCV tespit edildi.")
+        if self._cuda:
+            try:
+                self._log.info("[Cam] CUDA destekli OpenCV tespit edildi.")
+            except Exception:
+                pass
+
+        self._wait_tmr: Optional[QTimer] = None
+        self._wait_elapsed = 0  # ms
 
     def start(self, src: str, res: str):
-        if self._proc and self._proc.is_alive(): self.stop()
-        try: w,h = map(int, res.lower().replace('×','x').split('x'))
-        except ValueError:
-            self._log.error(f"Geçersiz çözünürlük: {res}"); self.failed.emit("Çözünürlük"); return
-        self._q, self._stop_evt = multiprocessing.Queue(2), multiprocessing.Event()
-        self._proc = _CameraReaderProcess(src,(w,h),self._q,self._stop_evt,self._cuda,
-                                          log_level=self._log.__dict__.get("levelname","INFO"))
-        self._proc.start(); self._poll.start(); self.started.emit()
+        # Önce varsa kapat
+        if self._proc and self._proc.is_alive():
+            self.stop()
+
+        # Çözünürlüğü ayrıştır
+        try:
+            w, h = map(int, res.lower().replace('×', 'x').split('x'))
+        except Exception:
+            self._log.error(f"Geçersiz çözünürlük: {res}")
+            self.failed.emit("Çözünürlük")
+            return
+
+        # Child process için kaynaklar
+        self._q = multiprocessing.Queue(maxsize=2)
+        self._stop_evt = multiprocessing.Event()
+
+        # Logger level elde edilemiyorsa INFO’ya düş
+        log_level = "INFO"
+        try:
+            # ILoggerPort genelde .level veya benzeri taşımaz; sabit bırakıyoruz.
+            pass
+        except Exception:
+            pass
+
+        # Süreci başlat
+        self._proc = _CameraReaderProcess(
+            src, (w, h), self._q, self._stop_evt, self._cuda, log_level=log_level
+        )
+        self._proc.daemon = True  # uygulama kapanırken arkada kalmasın
+        try:
+            self._proc.start()
+        except Exception as e:
+            self._log.error(f"Kamera süreci başlatılamadı: {e}")
+            self.failed.emit("Process")
+            return
+
+        self._poll.start()
+        self.started.emit()
+        self._log.info("Kamera adaptörü başlatıldı.")
 
     def stop(self):
         """Kamerayı durdur – UI’yı bloklama."""
         if not self._proc:
             return
 
-        # 1) Sürece “dur” sinyali gönder
-        self._stop_evt.set()
+        # 1) Sürece “dur” sinyali
+        try:
+            if self._stop_evt:
+                self._stop_evt.set()
+        except Exception:
+            pass
 
-        # 2) join(2) yerine: arka planda bekle
-        self._wait_tmr = QTimer(self, interval=100, singleShot=False)
-        self._wait_elapsed = 0  # ms
-        self._wait_tmr.timeout.connect(self._check_proc_end)
+        # 2) join yerine arka planda bekle
+        if self._wait_tmr is None:
+            self._wait_tmr = QTimer(self)
+            self._wait_tmr.setInterval(100)
+            self._wait_tmr.setSingleShot(False)
+            self._wait_tmr.timeout.connect(self._check_proc_end)
+
+        self._wait_elapsed = 0
         self._wait_tmr.start()
 
-        # UI hemen serbest – stopped emit’ini süreç bittikten sonra yapacağız
-        self._poll.stop()  # kare çekmeyi durdur
+        # UI serbest
+        self._poll.stop()
         self._log.info("Kamera sürecinin kapanması bekleniyor…")
 
     # ---------------- internal helper ----------------
     def _check_proc_end(self):
         """100 ms’de bir çağrılır; süreç ölmezse 2 sn sonra terminate."""
-        if not self._proc:  # güvenlik
-            self._wait_tmr.stop();
+        if not self._proc:
+            if self._wait_tmr:
+                self._wait_tmr.stop()
             return
 
         if not self._proc.is_alive():
@@ -128,22 +210,46 @@ class OpenCVAdapter(QObject):
         self._wait_elapsed += 100
         if self._wait_elapsed >= 2000:  # 2 sn geçti
             self._log.warning("Kamera süreci zorla sonlandırılıyor.")
-            self._proc.terminate()
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
             self._finalize_stop("forced")
 
     def _finalize_stop(self, reason: str):
-        self._wait_tmr.stop()
-        self._proc.join(timeout=0)  # artık anlık
-        self._proc = None;
+        if self._wait_tmr:
+            self._wait_tmr.stop()
+        try:
+            if self._proc:
+                self._proc.join(timeout=0)
+        except Exception:
+            pass
+
+        self._proc = None
         self._q = None
+        self._stop_evt = None
         self.stopped.emit(reason)
+        self._log.info(f"Kamera adaptörü durdu: {reason}")
 
     def _poll_q(self):
-        if not self._q: return
+        if not self._q:
+            return
+
+        # Süreç çöktüyse ve sırada kare yoksa “failed” sinyali
         if self._proc and (not self._proc.is_alive()) and self._q.empty():
-            self._poll.stop(); self.failed.emit("Kamera süreci bitti"); return
+            self._poll.stop()
+            self.failed.emit("Kamera süreci bitti")
+            return
+
         last = None
-        while not self._q.empty():
-            try: last = self._q.get_nowait()
-            except multiprocessing.queues.Empty: break
-        if last is not None: self.new_frame.emit(last)
+        while True:
+            try:
+                item = self._q.get_nowait()
+                last = item
+            except pyqueue.Empty:
+                break
+            except Exception:
+                break
+
+        if last is not None:
+            self.new_frame.emit(last)

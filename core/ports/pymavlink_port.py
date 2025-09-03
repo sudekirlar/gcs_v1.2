@@ -1,3 +1,5 @@
+# core/ports/pymavlink_port.py
+
 """
 rev.4 – goto(...) imzası eklendi
 """
