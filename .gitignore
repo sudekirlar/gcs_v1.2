@@ -1,11 +1,61 @@
-.env
-*.log
+# === Python ===
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Virtual env
+.env
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+
+# Build / dist
 build/
 dist/
+.eggs/
+*.bak
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
 logs/gcs.log
-.idea/
-*.MP4
-*.pt
+
+# Byte-compiled / cache
 *.pyc
+*.pyo
+*.pyd
+
+# === IDE / Editor ===
+.idea/
+.vscode/
+*.iml
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Videos ===
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.avi
+*.AVI
+
+# === ML models ===
+*.pt
+*.pth
+*.onnx
+
+# === Config / Secrets ===
 config/firebase_key.json
