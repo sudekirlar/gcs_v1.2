@@ -13,14 +13,14 @@ os.environ["GST_PLUGIN_FEATURE_RANK"] = ";".join([
 os.environ.pop("GST_PLUGIN_PATH", None)
 
 # --- Video URI ---
-VIDEO = Path(r"C:\Users\SUDE\Desktop\gcs_v1.2\source_videos\test2.mp4")
+VIDEO = Path(r"C:\Users\SUDE\Desktop\gcs_v1.2\source_videos\sample10.MOV")
 assert VIDEO.exists(), f"Dosya yok: {VIDEO}"
 URI = VIDEO.as_uri()
 
 pipeline = (
     f"uridecodebin uri={URI} expose-all-streams=false ! "
     "videoconvert ! video/x-raw,format=BGR ! "
-    "appsink drop=true max-buffers=1 sync=false"
+    "appsink drop=true max-buffers=1 sync=true"
 )
 
 # --- CUDA kontrolü ---

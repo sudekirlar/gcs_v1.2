@@ -28,22 +28,25 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     )
 
     # 2) Test Videosu
-    video_uri = Path("source_videos/sample9.MOV").resolve().as_uri()
+    video_uri = Path("source_videos/sample10.MOV").resolve().as_uri()
     video_pipeline = (
-        f"uridecodebin uri={video_uri} ! "
-        # Eski, stabil yapıya dönüp senkronizasyonu düzeltiyoruz
-        "d3d12convert ! d3d12download ! "
+        f"uridecodebin uri={video_uri} expose-all-streams=false ! "
         "videoconvert ! video/x-raw,format=BGR ! "
-        # --- ANA DEĞİŞİKLİK: Video dosyasının doğru hızda oynaması için ---
         "appsink drop=true max-buffers=1 sync=true"
     )
 
     # 3) SIYI A8 – UDP/RTP (Kısa Yol ile Optimize Edilmiş)
+    # siyi_udp_pipeline = (
+    #     "udpsrc port=5000 caps=\"application/x-rtp, encoding-name=H264, payload=96\" ! "
+    #     "rtph264depay ! h264parse ! d3d12h264device1dec ! "
+    #     # d3d12convert kaldırıldı eğer gerekirse videodaki gibi ekle.
+    #     "d3d12download ! "
+    #     "videoconvert ! video/x-raw,format=BGR ! "
+    #     "appsink drop=true max-buffers=1 sync=false"
+    # )
     siyi_udp_pipeline = (
         "udpsrc port=5000 caps=\"application/x-rtp, encoding-name=H264, payload=96\" ! "
-        "rtph264depay ! h264parse ! d3d12h264device1dec ! "
-        # d3d12convert kaldırıldı eğer gerekirse videodaki gibi ekle.
-        "d3d12download ! "
+        "rtph264depay ! h264parse ! decodebin ! "  # decodebin'e işi bırakıyoruz
         "videoconvert ! video/x-raw,format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false"
     )
