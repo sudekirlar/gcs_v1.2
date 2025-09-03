@@ -13,11 +13,11 @@ class CommandController(QObject):
     UI, adapter katmanını hiç görmez.
     """
     # Renkler (gerekirse Settings’e alınabilir)
-    COLOR_OK = "#2e7d32"       # yeşil
+    COLOR_OK = "#ffd1dc"       # yeşil
     COLOR_ERR = "#c62828"      # kırmızı
-    COLOR_INFO = "#1565c0"     # mavi
+    COLOR_INFO = "#fde910"     # mavi
     COLOR_WARN = "#ef6c00"     # turuncu
-    COLOR_TEXT = "#222222"     # siyah-gri
+    COLOR_TEXT = "#fffff0"     # siyah-gri
 
     def __init__(self, ui, core, logger, parent=None):
         super().__init__(parent)
@@ -36,7 +36,7 @@ class CommandController(QObject):
         core.command_ack_received.connect(self._ack_status)
 
         # Başlangıç mesajı (opsiyonel)
-        self._append_status("CommandController hazır.", self.COLOR_INFO)
+        self._append_status("Sistem hazır.", self.COLOR_INFO)
 
     # -------------------- helpers --------------------
     @pyqtSlot()
