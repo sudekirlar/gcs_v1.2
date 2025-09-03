@@ -12,15 +12,14 @@ class CameraSource(BaseModel):
     name: str
     path: str
 
-
 def _default_cam_sources() -> Tuple[CameraSource, ...]:
     """
-    Üç kaynak da GStreamer pipeline:
-      1) Laptop Kamerası (Windows: ksvideosrc)
+    Windows için GStreamer pipeline’ları:
+      1) Laptop Kamerası (ksvideosrc)
       2) Test Videosu (uridecodebin)
-      3) SIYI A8 (UDP/RTP H.264) → decodebin (NVDEC tercihli, avdec fallback)
+      3) SIYI A8 (UDP/RTP H.264) → NVDEC (nvh264dec) tercihli
     """
-    # 1) Laptop Kamera (Windows)
+    # 1) Laptop Kamera
     laptop_pipeline = (
         "ksvideosrc device-index=0 ! "
         "video/x-raw,width=1280,height=720,framerate=30/1 ! "
@@ -28,21 +27,20 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
         "appsink drop=true max-buffers=1 sync=false"
     )
 
-    # 2) Test Videosu (geliştirme kolaylığı için – prod’da canlı akış kullanılır)
-    video_uri = Path('source_videos/test2.mp4').resolve().as_uri()
+    # 2) Test Videosu
+    video_uri = Path("source_videos/test2.mp4").resolve().as_uri()
     video_pipeline = (
         f"uridecodebin uri={video_uri} expose-all-streams=false ! "
+        "d3d12convert ! d3d12download ! "
         "videoconvert ! video/x-raw,format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false"
     )
 
-    # 3) SIYI A8 (UDP/RTP – H.264) – NVDEC tercihli otomatik seçim
-    # decodebin: NVDEC (nvh264dec) varsa onu, yoksa avdec_h264'ü seçer.
-    # Port/payload değerlerini SIYI ayarına göre güncelle.
+    # 3) SIYI A8 – UDP/RTP
     siyi_udp_pipeline = (
         "udpsrc port=5000 caps=\"application/x-rtp, encoding-name=H264, payload=96\" ! "
-        "rtph264depay ! h264parse ! "
-        "decodebin ! "  # NVDEC öncelik, avdec fallback (rank ile kontrol ediyoruz)
+        "rtph264depay ! h264parse ! decodebin ! "
+        "d3d12convert ! d3d12download ! "
         "videoconvert ! video/x-raw,format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false"
     )
@@ -52,6 +50,7 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
         CameraSource(name="Test Videosu",    path=video_pipeline),
         CameraSource(name="SIYI A8 (UDP)",   path=siyi_udp_pipeline),
     )
+
 
 
 # ---------- Ana ayarlar ----------
