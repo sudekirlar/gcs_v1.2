@@ -1,38 +1,45 @@
 # adapters/mavlink/helpers/command_factory.py
-
 """
-Process-tarih: 2025-07-19 rev.4
 • GOTO komutu MAV_CMD_NAV_WAYPOINT ile gönderiliyor
+• SET_SERVO (MAV_CMD_DO_SET_SERVO) eklendi
 """
-
 from typing import Tuple, Dict, Any
 from pymavlink import mavutil
 
-Command = Tuple[str, Dict[str, Any]]      # örn. ("ARM", {...})
+Command = Tuple[str, Dict[str, Any]]  # örn. ("ARM", {...})
 
 
 class CommandFactory:
     # ---------- Core / UI ----------
     @staticmethod
-    def arm()      -> Command: return ("ARM", {})
+    def arm() -> Command: return ("ARM", {})
     @staticmethod
-    def disarm()   -> Command: return ("DISARM", {})
+    def disarm() -> Command: return ("DISARM", {})
     @staticmethod
-    def land()     -> Command: return ("LAND", {})
+    def land() -> Command: return ("LAND", {})
     @staticmethod
     def takeoff(alt: float) -> Command: return ("TAKEOFF", {"alt": alt})
     @staticmethod
-    def set_mode(mode: str)  -> Command: return ("SET_MODE", {"mode": mode})
+    def set_mode(mode: str) -> Command: return ("SET_MODE", {"mode": mode})
 
     # ---------- GUIDED tek-nokta ----------
     @staticmethod
     def goto(lat: float, lon: float, alt: float, yaw: float = 0.0) -> Command:
         """
         GUIDED modda tek koordinata git.
-        hold_time = 0, accept_radius = 0 (= WP_RADIUS),
-        pass_radius = 0, yaw = deg, lat/lon/alt WGS-84.
+        hold_time=0, accept_radius=0 (=WP_RADIUS), pass_radius=0, yaw=deg
         """
         return ("GOTO", {"lat": lat, "lon": lon, "alt": alt, "yaw": yaw})
+
+    # ---------- SERVO ----------
+    @staticmethod
+    def set_servo(channel: int, pwm: int) -> Command:
+        """
+        MAV_CMD_DO_SET_SERVO
+        :param channel: 1..14 (MAIN/AUX mapping autopilot konfigine bağlı)
+        :param pwm: 1000..2000 µs arası
+        """
+        return ("SET_SERVO", {"channel": int(channel), "pwm": int(pwm)})
 
     # ---------- Worker ----------
     @staticmethod
@@ -89,10 +96,17 @@ class CommandFactory:
                 0,  # seq (tek seferlik)
                 mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
                 mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # 16
-                2, 0,  # ★ current = 2  (guided–wp), autocontinue = 0
+                2, 0,  # ★ current = 2 (guided–wp), autocontinue = 0
                 0, 0, 0, p.get("yaw", 0.0),  # hold, accept, pass, yaw
-                p["lat"], p["lon"], p["alt"])  # lat, lon, alt (float deg/m)
+                p["lat"], p["lon"], p["alt"])  # lat, lon, alt
+
+        # ------------------ SET_SERVO ---------------------
+        elif name == "SET_SERVO":
+            p = params
+            send(mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+                 p1=p["channel"], p2=p["pwm"])
 
         # ------------------ Bilinmeyen --------------------
         else:
             raise ValueError(f"Desteklenmeyen komut: {name}")
+

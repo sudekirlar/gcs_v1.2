@@ -1,10 +1,10 @@
 # core/gcs_core.py
 from __future__ import annotations
-from typing import Dict, Optional, Any
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
+from typing import Dict, Optional, Any, Tuple
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer
 
 from config.settings import Settings
-from core.ports.logger_port   import ILoggerPort
+from core.ports.logger_port    import ILoggerPort
 from core.ports.pymavlink_port import IPyMavlinkPort
 from core.ports.firebase_port  import IFirebasePort
 from core.assistance_request   import AssistanceRequest
@@ -41,10 +41,23 @@ class GCSCore(QObject):
         # Mobil istekler
         self._latest_mobile_req: Optional[AssistanceRequest] = None
 
-        #  -- Kesinti iş akışı değişkenleri --
+        # -- Kesinti iş akışı değişkenleri --
         self._awaiting_guided = False
         self._pending_req    : Optional[AssistanceRequest] = None
         self._pending_alt    = 0.0
+
+        # -- Mobil hedefe yönelim + varış --
+        self._is_enroute_to_mobile_target: bool = False
+        self._mobile_target_coords: Optional[Tuple[float, float]] = None  # (lat, lon)
+        self._arrival_threshold_m: float = 3.0  # varış metriği
+        self._wait_before_release_ms: int = 15_000  # 15 sn
+        self._servo_channel: int = 9
+        self._servo_pwm: int = 1750
+        self._release_done: bool = False
+
+        self._arrival_timer = QTimer(self)
+        self._arrival_timer.setSingleShot(True)
+        self._arrival_timer.timeout.connect(self._release_payload)
 
         # MAVLink sinyalleri
         mav_adapter.connected.connect(self.connection_opened)
@@ -62,25 +75,51 @@ class GCSCore(QObject):
     # =================================================================
     @pyqtSlot(dict)
     def _on_telemetry(self, d: Dict[str, Any]):
-        if "alt"  in d: self._current_alt = d["alt"]
+        if "alt" in d:
+            self._current_alt = float(d["alt"])
 
+        # --- MOD değişimi takip ---
         if "mode" in d:
-            new_mode = d["mode"].upper()
+            new_mode = str(d["mode"]).upper()
             if new_mode != self._mode:
                 self._mode = new_mode
                 self._log.info(f"[MODE] {self._mode}")
 
-                # GUIDED teyidi bekliyorsak
-                if self._awaiting_guided and self._mode == "GUIDED" \
-                        and self._pending_req:
+                # GUIDED teyidi bekliyorsak → GOTO at ve enroute başlat
+                if self._awaiting_guided and self._mode == "GUIDED" and self._pending_req:
                     r = self._pending_req
                     alt = self._pending_alt
                     self._awaiting_guided = False
                     self._pending_req = None
+
                     self._log.info("♦ NAV_WAYPOINT gönderiliyor (mobil hedef)")
                     self._mav.goto(r.lat, r.lon, alt)
 
-        if "armed" in d: self._armed = bool(d["armed"])
+                    # Enroute takibi
+                    self._is_enroute_to_mobile_target = True
+                    self._mobile_target_coords = (r.lat, r.lon)
+                    self._release_done = False
+                    if self._arrival_timer.isActive():
+                        self._arrival_timer.stop()
+
+        # --- Varış kontrolü (lat/lon varsa) ---
+        if self._is_enroute_to_mobile_target and ("lat" in d and "lon" in d):
+            try:
+                cur_lat = float(d["lat"]); cur_lon = float(d["lon"])
+                tgt_lat, tgt_lon = self._mobile_target_coords or (None, None)
+                if tgt_lat is not None:
+                    dist_m = self._haversine_m(cur_lat, cur_lon, tgt_lat, tgt_lon)
+                    if dist_m <= self._arrival_threshold_m:
+                        self._is_enroute_to_mobile_target = False
+                        self._log.info(f"► Hedefe varıldı (~{dist_m:.1f} m). "
+                                       f"{self._wait_before_release_ms/1000:.0f} sn bekleniyor…")
+                        self._arrival_timer.start(self._wait_before_release_ms)
+            except Exception as e:
+                self._log.error(f"Varış kontrolü hatası: {e}")
+
+        if "armed" in d:
+            self._armed = bool(d["armed"])
+
         self.telemetry_updated.emit(d)
 
     # =================================================================
@@ -96,13 +135,20 @@ class GCSCore(QObject):
     # UI → “Göreve Ara” butonu çağırır
     # -----------------------------------------------------------------
     def interrupt_mission_for_request(self, req: AssistanceRequest):
-        if self._mode != "AUTO":
-            self._log.warning("Görev kesilemedi: Drone AUTO modda değil")
-            return
+        # if self._mode != "AUTO":
+        #     self._log.warning("Görev kesilemedi: Drone AUTO modda değil")
+        #     return
 
         self._pending_req = req
         self._pending_alt = max(self._current_alt, 5.0)  # güvenli irtifa
         self._awaiting_guided = True
+
+        # Enroute state reset
+        self._is_enroute_to_mobile_target = False
+        self._mobile_target_coords = (req.lat, req.lon)
+        self._release_done = False
+        if self._arrival_timer.isActive():
+            self._arrival_timer.stop()
 
         self._log.info("♦ Adım 1: GUIDED moda geç komutu gönderildi")
         self.set_mode("GUIDED")
@@ -171,3 +217,25 @@ class GCSCore(QObject):
     def _reject(self, cmd: str, reason: str):
         self._log.warning(f"{cmd} reddedildi: {reason}")
         self.command_ack_received.emit(cmd, -1)
+
+    @staticmethod
+    def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """
+        Metre cinsinden hızlı Haversine.
+        """
+        from math import radians, sin, cos, asin, sqrt
+        R = 6371000.0
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a))
+        return R * c
+
+    def _release_payload(self):
+        if self._release_done:
+            return
+        self._release_done = True
+        self._log.info(f"► 15 sn doldu. Yük bırakılıyor: SERVO {self._servo_channel} → PWM {self._servo_pwm}")
+        self._mav.set_servo(self._servo_channel, self._servo_pwm)
+        # İstersen kapama için küçük bir single-shot daha ekleyebilirsin (örn. 1 sn sonra 1100 µs),
+        # benden istek gelmediği için tek tetik ile bıraktım.

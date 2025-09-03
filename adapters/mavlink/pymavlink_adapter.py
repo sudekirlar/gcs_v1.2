@@ -1,4 +1,5 @@
 # adapters/mavlink/pymavlink_adapter.py
+
 from typing import Optional
 from queue import Queue, Empty
 
@@ -13,7 +14,6 @@ from adapters.mavlink.helpers.command_factory import CommandFactory, Command  # 
 # ====================================================================
 # Thread-worker: I/O + komut kuyruğu + COMMAND_ACK dinleme
 # ====================================================================
-
 class _Worker(QObject):
     connected    = pyqtSignal(str)
     failed       = pyqtSignal(str)
@@ -27,7 +27,6 @@ class _Worker(QObject):
         self._running = False
         self._master: Optional[mavutil.mavfile] = None
 
-    # ---------------- ana döngü ----------------
     @pyqtSlot()
     def run(self):
         # --- bağlantı ---
@@ -60,22 +59,18 @@ class _Worker(QObject):
                     continue
 
                 if msg.get_type() == "COMMAND_ACK":
-                    # Komut ID → Enum adı
                     try:
                         cmd_enum = mavutil.mavlink.enums['MAV_CMD'][msg.command]
                         cmd_name = cmd_enum.name
                     except (KeyError, AttributeError):
                         cmd_name = f"UNKNOWN_CMD_{msg.command}"
-
                     self.command_ack.emit(cmd_name, msg.result)
 
                 elif msg.get_type() == "MISSION_ACK":
-                    # ArduPilot: type 0=ACCEPTED, 1=ERROR, 2=UNSUPPORTED, 3=NO_SPACE
-                    result = msg.type  # uint8 result kodu
+                    result = msg.type  # 0=ACCEPTED, 1=ERROR, 2=UNSUPPORTED, 3=NO_SPACE
                     self.command_ack.emit("MISSION_ACK", result)
 
-                elif msg.get_type() == "STATUSTEXT":  # <-- YENİ BLOK
-                    # Gelen durumu loglayalım ki nedenini görelim
+                elif msg.get_type() == "STATUSTEXT":
                     text = msg.text.strip()
                     severity = mavutil.mavlink.enums['MAV_SEVERITY'][msg.severity].name
                     self._logger.warning(f"DRONE MESAJI [{severity}]: {text}")
@@ -84,16 +79,18 @@ class _Worker(QObject):
                     self.raw_msg.emit(msg)
 
         except Exception as e:
-            self._running = False               # worker dursun ama link lost sinyali YOK
+            self._running = False
             self._logger.error(f"Worker hatası: {e}")
 
         finally:
             if self._master:
-                self._master.close()
-            if self._running:                   # True ise gerçekten koptu
+                try:
+                    self._master.close()
+                except Exception:
+                    pass
+            if self._running:
                 self.disconnected.emit("link lost")
 
-    # ---------------- durdurma ----------------
     @pyqtSlot(str)
     def stop(self, reason: str = "user request"):
         self._running = False
@@ -103,14 +100,12 @@ class _Worker(QObject):
 # ====================================================================
 # Ana adapter ‒ main-thread
 # ====================================================================
-
 class PymavlinkAdapter(QObject):
-    # ---- sinyaller ----
     connected    = pyqtSignal(str)
     failed       = pyqtSignal(str)
     disconnected = pyqtSignal(str)
     telemetry    = pyqtSignal(dict)
-    command_ack  = pyqtSignal(str, int)          # cmd_name, result
+    command_ack  = pyqtSignal(str, int)  # cmd_name, result
 
     def __init__(self, logger: ILoggerPort, parent=None):
         super().__init__(parent)
@@ -144,19 +139,20 @@ class PymavlinkAdapter(QObject):
     def land(self):                self._cmd_q.put(CommandFactory.land())
     def takeoff(self, alt: float): self._cmd_q.put(CommandFactory.takeoff(alt))
     def set_mode(self, mode: str): self._cmd_q.put(CommandFactory.set_mode(mode))
-
     def goto(self, lat, lon, alt, yaw=0.0):
         self._cmd_q.put(CommandFactory.goto(lat, lon, alt, yaw))
+    def set_servo(self, channel: int, pwm: int):
+        self._cmd_q.put(CommandFactory.set_servo(channel, pwm))
 
     # ---------- internal ----------
     def _start_worker(self, url: str):
-        self.close()                               # önceki worker varsa kapat
+        self.close()  # önceki worker varsa kapat
 
         self._thread = QThread()
         self._worker = _Worker(url, self._logger, self._cmd_q)
         self._worker.moveToThread(self._thread)
 
-        # sinyal köprüleri
+        # köprüler
         self._worker.connected.connect(self.connected)
         self._worker.failed.connect(self.failed)
         self._worker.disconnected.connect(self.disconnected)
