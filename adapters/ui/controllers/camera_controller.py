@@ -3,11 +3,15 @@
 UI ► CameraController ◄ CameraCore
 • Comboları doldurur, Aç/Kapat butonlarını yönetir
 • new_frame’de QLabel’e FPS + ms overlay’li görüntü basar
+• Pose sonuçlarını alır, kutu + etiket çizer (T-POSE: kırmızı, ARMS-UP: turuncu)
+• OPTIMIZATION:
+    1) Eskime kontrolü: pose_age > 0.250s ise kutular çizilmez (stale overlay yok)
+    2) Smoothing sırası: Önce QLabel koordinatına map, sonra OneEuro ile yumuşat
 """
 
-import time
+import time, math
 from collections import deque
-from typing import Dict
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSlot, Qt
@@ -15,7 +19,75 @@ from PyQt5.QtGui  import QImage, QPixmap, QPainter, QFont, QPen, QColor
 
 from config.settings import Settings
 
+# ---- Renk/Pen ----
+ColorRed    = QColor(255, 0, 0)
+ColorOrange = QColor(255, 165, 0)
+ColorGrey   = QColor(180, 180, 180)
+PenRed    = QPen(ColorRed, 2)
+PenOrange = QPen(ColorOrange, 2)
+PenGrey   = QPen(ColorGrey, 2)
 
+# ===================== OneEuro (UI smoothing) =====================
+class _OneEuro:
+    @staticmethod
+    def _alpha(cutoff: float, freq: float) -> float:
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        te  = 1.0 / max(1e-6, freq)
+        return 1.0 / (1.0 + tau / te)
+
+    def __init__(self, freq=30.0, mincutoff=1.0, beta=0.007, dcutoff=1.0):
+        self.freq=freq; self.mincutoff=mincutoff; self.beta=beta; self.dcutoff=dcutoff
+        self._xp=None; self._dx=0.0; self._tp=None
+
+    def __call__(self, x: float, t: float) -> float:
+        if self._tp is None:
+            self._tp=t; self._xp=float(x); self._dx=0.0
+            return float(x)
+        dt = max(1e-6, t - self._tp)
+        self.freq = 1.0 / dt
+        dx = (x - self._xp) * self.freq
+        a_d = self._alpha(self.dcutoff, self.freq)
+        self._dx = a_d * dx + (1.0 - a_d) * self._dx
+        cutoff = self.mincutoff + self.beta * abs(self._dx)
+        a = self._alpha(cutoff, self.freq)
+        xh = a * x + (1.0 - a) * self._xp
+        self._xp = xh; self._tp = t
+        return float(xh)
+
+class _BBoxSmoother:
+    """
+    track-id başına (x,y,w,h) için OneEuro filtreleri.
+    DİKKAT: QLabel koordinat sisteminde çalışır (UI-space smoothing).
+    """
+    def __init__(self, mincutoff: float = 1.0, beta: float = 0.007):
+        self._mincut = float(mincutoff)
+        self._beta   = float(beta)
+        self._state: Dict[int, Dict[str, _OneEuro]] = {}
+        self._last_seen: Dict[int, float] = {}
+
+    def smooth_label_space(self, tid: int, lbbox: Tuple[float,float,float,float], now: float) -> Tuple[int,int,int,int]:
+        st = self._state.get(tid)
+        if st is None:
+            st = {
+                "x": _OneEuro(mincutoff=self._mincut, beta=self._beta),
+                "y": _OneEuro(mincutoff=self._mincut, beta=self._beta),
+                "w": _OneEuro(mincutoff=self._mincut, beta=self._beta),
+                "h": _OneEuro(mincutoff=self._mincut, beta=self._beta),
+            }
+            self._state[tid] = st
+        self._last_seen[tid] = now
+        x, y, w, h = map(float, lbbox)
+        xs = st["x"](x, now); ys = st["y"](y, now)
+        ws = st["w"](w, now); hs = st["h"](h, now)
+        return int(round(xs)), int(round(ys)), int(round(ws)), int(round(hs))
+
+    def gc(self, now: float, ttl_sec: float = 8.0):
+        stale = [tid for tid, ts in self._last_seen.items() if now - ts > ttl_sec]
+        for tid in stale:
+            self._last_seen.pop(tid, None)
+            self._state.pop(tid, None)
+
+# ===================== Controller =====================
 class CameraController(QObject):
     """
     ui_widgets = {
@@ -26,14 +98,8 @@ class CameraController(QObject):
         'display_label': QLabel
     }
     """
-    # --------------------------------------------------------------
-    def __init__(
-        self,
-        ui_widgets: Dict[str, object],
-        core,                  # CameraCore
-        settings: Settings,
-        parent=None,
-    ):
+    # ------------------------------
+    def __init__(self, ui_widgets: Dict[str, object], core, settings: Settings, parent=None):
         super().__init__(parent)
         self._ui   = ui_widgets
         self._core = core
@@ -41,22 +107,34 @@ class CameraController(QObject):
 
         self._populate_combos()
 
-        # --- UI olayları ---
+        # UI olayları
         self._ui['open_btn' ].clicked.connect(self._on_open)
         self._ui['close_btn'].clicked.connect(self._core.stop_camera)
 
-        # --- Core olayları ---
+        # Core olayları
         self._core.camera_started.connect(self._on_started)
         self._core.camera_stopped.connect(self._on_stopped)
         self._core.camera_failed .connect(self._on_failed)
 
-        # FPS & latency ölçümü
-        self._ts_hist = deque(maxlen=30)   # son 30 frame aralığı
+        # Pose sonuçları
+        try:
+            self._core.camera_pose_results.connect(self.on_pose_results)
+        except Exception:
+            pass
+
+        # FPS ölçümü
+        self._ts_hist = deque(maxlen=30)
         self._last_ts = None
 
-    # ==============================================================
-    #   UI yardımcıları
-    # ==============================================================
+        # Pose cache + eskime
+        self._latest_pose: List[dict] = []
+        self._last_pose_update_time: float = 0.0
+        self._pose_stale_max_sec: float = 0.250  # <<< kritik: 250 ms sonra overlay'i gizle
+
+        # UI-space bbox smoother
+        self._bbox_smoother = _BBoxSmoother(mincutoff=1.0, beta=0.007)
+
+    # ------------------------------
     def _populate_combos(self):
         for src in self._cfg.camera_sources:
             self._ui['source_combo'].addItem(src.name, userData=src.path)
@@ -69,9 +147,6 @@ class CameraController(QObject):
         res  = self._ui['res_combo'].currentText()
         self._core.start_camera(path, res)
 
-    # ==============================================================
-    #   Core feedback → UI
-    # ==============================================================
     @pyqtSlot()
     def _on_started(self): self._toggle_ui(True)
     @pyqtSlot(str)
@@ -91,55 +166,145 @@ class CameraController(QObject):
         self._ts_hist.clear()
         self._last_ts = None
 
-    # ==============================================================
-    #   Frame işleme & gösterme
-    # ==============================================================
+        # Pose state reset
+        if not running:
+            self._latest_pose = []
+            self._last_pose_update_time = 0.0
+
+    # ------------------------------ Pose sinyali
+    @pyqtSlot(object)
+    def on_pose_results(self, detections: object):
+        """
+        detections: List[PoseDetectionDTO] (dict)
+        DTO: {track_id, class_id, label, bbox:(x,y,w,h), conf, ts}
+        """
+        try:
+            # _latest_pose'u her zaman güncel tut:
+            # - Liste geldiyse: olduğu gibi ata (boş olsa bile)
+            # - Başka tip veya None geldiyse: boş listeye düş
+            self._latest_pose = detections if isinstance(detections, list) else []
+
+            # ESKİME KONTROLÜ:
+            # Sadece DOLU listede zaman damgasını güncelle.
+            # Boş listede güncelleme yok → 250 ms sonra overlay otomatik sönümlenir.
+            if self._latest_pose:
+                # DTO'larda ts varsa en büyüğünü kullan; yoksa 'now'
+                max_ts = max((float(d.get("ts", 0.0)) for d in self._latest_pose), default=0.0)
+                self._last_pose_update_time = max(max_ts, time.time())
+
+        except Exception:
+            # Sessiz düş; UI'yi kilitlemeyelim
+            pass
+
+    # ------------------------------ Yardımcı: frame→QLabel mapping (float)
+    @staticmethod
+    def _map_bbox_to_label_float(
+        bbox: Tuple[int,int,int,int],
+        frame_wh: Tuple[int,int],
+        label_wh: Tuple[int,int]
+    ) -> Optional[Tuple[float,float,float,float]]:
+        x, y, w, h = bbox
+        w0, h0 = frame_wh
+        W, H   = label_wh
+        if w0 <= 0 or h0 <= 0 or W <= 0 or H <= 0:
+            return None
+        # KeepAspectRatioByExpanding
+        s = max(W / float(w0), H / float(h0))
+        scaled_w = w0 * s
+        scaled_h = h0 * s
+        x_off = (scaled_w - W) * 0.5
+        y_off = (scaled_h - H) * 0.5
+        x_p = x * s - x_off
+        y_p = y * s - y_off
+        w_p = w * s
+        h_p = h * s
+        return (float(x_p), float(y_p), float(w_p), float(h_p))
+
+    # ------------------------------ Ana çizim
     @pyqtSlot(object)
     def update_display(self, frame: np.ndarray):
         if frame is None:
             return
 
-        # ----- FPS hesapla -----
+        # ----- FPS -----
         now = time.time()
         if self._last_ts is not None:
             self._ts_hist.append(now - self._last_ts)
         self._last_ts = now
-
         if self._ts_hist:
             avg_dt = sum(self._ts_hist) / len(self._ts_hist)
-            fps = 1.0 / avg_dt
-            ms = avg_dt * 1000
+            fps = 1.0 / avg_dt if avg_dt > 1e-9 else 0.0
+            ms  = avg_dt * 1000.0
         else:
             fps = ms = 0.0
 
-        # ----- QPixmap oluştur (BGR→RGB) -----
-        h, w, ch = frame.shape
-        img = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888).rgbSwapped()
+        # ----- QPixmap -----
+        h0, w0, ch = frame.shape
+        img = QImage(frame.data, w0, h0, ch * w0, QImage.Format_RGB888).rgbSwapped()
         pix = QPixmap.fromImage(img)
 
-        # ----- QLabel alanına oran/kırp -----
+        # ----- QLabel crop (KeepAspectRatioByExpanding) -----
         lbl_size = self._ui['display_label'].size()
-        scaled = pix.scaled(
-            lbl_size,
-            Qt.KeepAspectRatioByExpanding,  # kenar kırp
-            Qt.SmoothTransformation  # daha hafif
-        )
-        x_off = (scaled.width() - lbl_size.width()) // 2
-        y_off = (scaled.height() - lbl_size.height()) // 2
-        cropped = scaled.copy(
-            x_off, y_off, lbl_size.width(), lbl_size.height()
-        )
+        W, H = lbl_size.width(), lbl_size.height()
+        scaled = pix.scaled(lbl_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        x_off = (scaled.width() - W) // 2
+        y_off = (scaled.height() - H) // 2
+        cropped = scaled.copy(x_off, y_off, W, H)
 
-        # ----- FPS overlay KIRPILMIŞ pixmap’e çiz -----
+        # ----- Çizim -----
         painter = QPainter(cropped)
         painter.setRenderHint(QPainter.TextAntialiasing)
         painter.setFont(QFont("Consolas", 10, QFont.Bold))
 
+        # FPS overlay (sol üst, gölgeli)
         txt = f"{fps:4.0f} fps  {ms:3.0f} ms"
-        painter.setPen(QPen(QColor(0, 0, 0), 2))  # gölge
-        painter.drawText(6, 16, txt)
-        painter.setPen(Qt.white)
-        painter.drawText(5, 15, txt)
-        painter.end()
+        painter.setPen(QPen(QColor(0, 0, 0), 2)); painter.drawText(6, 16, txt)
+        painter.setPen(Qt.white);                 painter.drawText(5, 15, txt)
 
+        # ----- Pose çizimi (eskime kontrolü + UI-space smoothing) -----
+        try:
+            # 1) Eskime kontrolü: sonuçlar çok eskidiyse hiç kutu çizme
+            pose_age = (now - self._last_pose_update_time) if self._last_pose_update_time > 0 else float("inf")
+            if pose_age <= self._pose_stale_max_sec and self._latest_pose:
+                # GC: uzun süredir görünmeyeni temizle
+                self._bbox_smoother.gc(now, ttl_sec=8.0)
+
+                # Her detection için:
+                for d in self._latest_pose:
+                    cid  = int(d.get("class_id", -1))
+                    bbox = d.get("bbox", None)
+                    label = d.get("label", None)
+                    tid  = int(d.get("track_id", -1))
+                    conf = float(d.get("conf", 0.0))
+                    if bbox is None or label is None or tid < 0:
+                        continue
+
+                    # (A) Önce QLabel koordinatına map'le (float)
+                    mapped = self._map_bbox_to_label_float(tuple(bbox), (w0, h0), (W, H))
+                    if mapped is None:
+                        continue
+
+                    # (B) Sonra UI-space OneEuro smoothing uygula
+                    mx, my, mw, mh = self._bbox_smoother.smooth_label_space(tid, mapped, now)
+
+                    # Renk seçimi
+                    if cid == 0:   painter.setPen(PenRed)
+                    elif cid == 1: painter.setPen(PenOrange)
+                    else:          painter.setPen(PenGrey)
+
+                    # Kutuyu çiz
+                    painter.drawRect(mx, my, mw, mh)
+
+                    # Etiket
+                    text = f"{label} {conf:.2f}"
+                    tx, ty = mx, max(14, my - 6)
+                    painter.setPen(QPen(QColor(0,0,0), 3)); painter.drawText(tx+1, ty+1, text)
+                    painter.setPen(Qt.white);               painter.drawText(tx, ty, text)
+            else:
+                # Çok eskimişse (veya hiç güncellenmediyse) overlay gizli kalsın
+                pass
+        except Exception:
+            pass
+
+        painter.end()
         self._ui['display_label'].setPixmap(cropped)

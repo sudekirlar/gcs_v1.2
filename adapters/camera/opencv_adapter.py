@@ -3,17 +3,28 @@
 Process-tabanlı OpenCV GStreamer adaptörü (Windows).
 – Kaynak GStreamer pipeline olarak gelir (Settings.camera_sources).
 – Decoder seçimi: decodebin + FEATURE_RANK ile NVDEC (nvh264dec) > avdec_h264.
-– Bu sürümde "sağlamlaştırma" eklendi:
+– Sağlamlaştırma:
     1) Başlangıç zaman aşımı (20s içinde ilk kare gelmezse)
     2) Yayın kesilmesi tespiti (10s kare yoksa)
     3) Net hata nedenleri (failed(reason))
+– Pose entegrasyonu (orchestrator model):
+    • _CameraReaderProcess SADECE kare okur ve TEK kuyruğa yazar.
+    • OpenCVAdapter UI’yı besler ve zaman-tabanlı örnekleme ile AI’ya kare gönderir.
+    • PoseProcessor ayrı process’te çalışır (MultiPoseManager).
 """
 
 from __future__ import annotations
 import os, cv2, time, logging, multiprocessing, queue as pyqueue
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from core.ports.logger_port import ILoggerPort
+
+# AI modülü (yalnızca alt process'te ağır yüklenir; burada import güvenli)
+try:
+    from services.mediapipe_pose_checker import MultiPoseManager  # AI process kullanacak
+    _HAS_POSE = True
+except Exception:
+    _HAS_POSE = False
 
 
 def _cuda_available() -> bool:
@@ -23,13 +34,18 @@ def _cuda_available() -> bool:
         return False
 
 
+# ==================== Reader Process (BASİT) ====================
 class _CameraReaderProcess(multiprocessing.Process):
+    """
+    Tek sorumluluk: GStreamer pipeline'dan kare okuyup frame_q'ya yazmak.
+    AI besleme, sampling vs. YOK — hepsi OpenCVAdapter'da.
+    """
     def __init__(
         self,
         source: str,                        # GStreamer pipeline STRING
         resolution_wh: Tuple[int, int],     # QLabel’e uydurmak için post-resize (UI zaten ölçekler)
         frame_q: multiprocessing.Queue,
-        reason_q: multiprocessing.Queue,     # NEW: süreçten neden bilgisi
+        reason_q: multiprocessing.Queue,     # süreçten neden bilgisi
         stop_event: multiprocessing.Event,
         use_cuda: bool,
         log_level: str = "INFO",
@@ -40,11 +56,6 @@ class _CameraReaderProcess(multiprocessing.Process):
         self._log_level = log_level
 
     def _setup_gstreamer_env(self, log: logging.Logger) -> None:
-        """
-        Her process başlangıcında:
-          - GStreamer DLL arama yolu (Windows)
-          - NVDEC/avdec öncelik sırası (decodebin için)
-        """
         # 1) DLL yolu (Windows – zorunlu)
         gst_bin_path = r"C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
         try:
@@ -56,20 +67,19 @@ class _CameraReaderProcess(multiprocessing.Process):
         except Exception as e:
             log.warning(f"[GST] DLL yolu eklenirken istisna: {e}")
 
-        # 2) Decoder önceliği: NVDEC MAX, avdec LOW (decodebin bunu dikkate alır)
+        # 2) Decoder önceliği
         try:
             ranks = [
                 "nvh264dec:MAX", "nvh265dec:MAX",
                 "avdec_h264:LOW", "avdec_h265:LOW",
             ]
             os.environ["GST_PLUGIN_FEATURE_RANK"] = ";".join(ranks)
-            os.environ.pop("GST_PLUGIN_PATH", None)  # kullanıcı PATH’leri karışmasın
+            os.environ.pop("GST_PLUGIN_PATH", None)
             log.info(f"[GST] FEATURE_RANK='{os.environ.get('GST_PLUGIN_FEATURE_RANK')}'")
         except Exception as e:
             log.warning(f"[GST] FEATURE_RANK ayarlanamadı: {e}")
 
     def _send_reason(self, reason: str) -> None:
-        """UI’ya net mesaj geçmek için (non-blocking)."""
         try:
             if self._rq is not None:
                 self._rq.put_nowait(reason)
@@ -82,17 +92,11 @@ class _CameraReaderProcess(multiprocessing.Process):
             format="CamProc | %(levelname)s | %(message)s",
         )
         log = logging.getLogger("cam.reader")
-
-        # GStreamer debug’u üretimde kapalı tutmak daha iyi
-        # os.environ["GST_DEBUG"] = "3"
-
         self._setup_gstreamer_env(log)
 
-        # CUDA (OpenCV) kullanılabilirliği – decode GPU’dan bağımsızdır
         log.info(f"OpenCV-CUDA: {'AKTİF' if self._cuda else 'PASİF'}")
         log.debug(f"Açılacak pipeline → {self._src}")
 
-        # GStreamer ile aç
         cap = cv2.VideoCapture(self._src, cv2.CAP_GSTREAMER)
         if not cap.isOpened():
             log.error("GStreamer pipeline AÇILAMADI. Pipeline / kurulum / ağ parametrelerini kontrol et.")
@@ -101,56 +105,36 @@ class _CameraReaderProcess(multiprocessing.Process):
 
         log.info("Pipeline açıldı; decodebin NVDEC'i tercih edecek, yoksa avdec'e düşecek.")
 
-        gpu_mat = None
-        if self._cuda:
-            try:
-                gpu_mat = cv2.cuda_GpuMat()
-            except Exception as e:
-                log.warning(f"CUDA GpuMat oluşturulamadı, CPU moduna düşülüyor. Detay: {e}")
-                self._cuda = False
-
-        # ---- Liveness (yayın kesilmesi) izlemesi ----
+        # Liveness
         last_success = time.perf_counter()
         LIVENESS_TIMEOUT = 10.0  # sn
-
         last_warn = 0.0
+
         try:
             while not self._stop.is_set():
                 t0 = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     now = time.perf_counter()
-                    # Yayın kesilmesi kontrolü
                     if (now - last_success) > LIVENESS_TIMEOUT:
                         log.error(f"Yayından {LIVENESS_TIMEOUT} saniyedir kare alınamıyor. Yayın kesildi varsayılıyor.")
                         self._send_reason(f"Yayın kesildi ({int(LIVENESS_TIMEOUT)}s)")
                         break
-                    # Sık log basma
                     if (now - last_warn) > 2.0:
                         log.warning("Frame alınamadı (geçici). Akış/EOS bekleniyor…")
                         last_warn = now
                     time.sleep(0.01)
                     continue
 
-                # Başarılı okuma → liveness timer’ı güncelle
                 last_success = time.perf_counter()
 
-                # (İsteğe bağlı) OpenCV-CUDA burada gerçek işlem yapacaksan kullanılmalı;
-                # yalnızca upload/download yapmak gereksizdir. Şimdilik hiç dokunmuyoruz.
-
-                # Process içinde resize/conversion YOK (UI ölçekler)
-                # Kuyruğa en taze kare – doluysa eskisini at
+                # UI kuyruğuna en taze kare (maxsize=1 → eskisini at)
                 if self._q.full():
-                    try:
-                        self._q.get_nowait()
-                    except Exception:
-                        pass
-                try:
-                    self._q.put_nowait(frame)
-                except Exception:
-                    pass
+                    try: self._q.get_nowait()
+                    except Exception: pass
+                try: self._q.put_nowait(frame)
+                except Exception: pass
 
-                # Hafif nefes – UI’yi rahatlat
                 if (time.perf_counter() - t0) < 0.001:
                     time.sleep(0.001)
 
@@ -164,35 +148,148 @@ class _CameraReaderProcess(multiprocessing.Process):
             log.info("Kamera okuma süreci kapandı.")
 
 
+# ==================== Pose Processor Process ====================
+class _PoseProcessorProcess(multiprocessing.Process):
+    """
+    AI process: MultiPoseManager burada yaşar.
+    in_q: frame (np.ndarray BGR), maxsize=1
+    out_q: List[DTO], maxsize=1
+    """
+    def __init__(
+        self,
+        in_q: multiprocessing.Queue,
+        out_q: multiprocessing.Queue,
+        stop_event: multiprocessing.Event,
+        topk: int = 2,
+        log_level: str = "INFO"
+    ):
+        super().__init__(name="PoseProcessor")
+        self._in_q = in_q
+        self._out_q = out_q
+        self._stop = stop_event
+        self._topk = max(1, int(topk))
+        self._log_level = log_level
+
+    @staticmethod
+    def _label_of(cid: int) -> Optional[str]:
+        if cid == 0: return "T-POSE"
+        if cid == 1: return "ARMS-UP"
+        return None
+
+    def run(self):
+        logging.basicConfig(
+            level=getattr(logging, self._log_level, logging.INFO),
+            format="PoseProc | %(levelname)s | %(message)s",
+        )
+        log = logging.getLogger("pose.proc")
+
+        if not _HAS_POSE:
+            log.error("mediapipe_pose_checker import edilemedi. PoseProcessor başlatılamıyor.")
+            return
+
+        try:
+            pipe = MultiPoseManager(topk=self._topk)
+        except Exception as e:
+            log.error(f"MultiPoseManager başlatılamadı: {e}")
+            return
+
+        try:
+            while not self._stop.is_set():
+                try:
+                    frame = self._in_q.get(timeout=0.5)
+                except pyqueue.Empty:
+                    continue
+                except Exception:
+                    continue
+
+                try:
+                    results = pipe.process(frame)  # List[(track_id, class_id, bbox, conf)]
+                except Exception as e:
+                    log.warning(f"Pose process hatası: {e}")
+                    results = []
+
+                now_ts = time.time()
+                dtos: List[Dict[str, Any]] = []
+                for tid, cid, bbox, conf in results:
+                    lbl = self._label_of(int(cid))
+                    if bbox is None:
+                        continue
+                    dto = {
+                        "track_id": int(tid),
+                        "class_id": int(cid),
+                        "label": lbl,
+                        "bbox": (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])),
+                        "conf": float(conf),
+                        "ts": float(now_ts),
+                    }
+                    dtos.append(dto)
+
+                # En taze sonuç kalsın
+                if self._out_q.full():
+                    try: self._out_q.get_nowait()
+                    except Exception: pass
+                try: self._out_q.put_nowait(dtos)
+                except Exception:
+                    pass
+
+        finally:
+            try: pipe.close()
+            except Exception: pass
+            log.info("PoseProcessor kapandı.")
+
+
+# ==================== OpenCV Adapter (Orchestrator) ====================
 class OpenCVAdapter(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal(str)
     failed  = pyqtSignal(str)
-    new_frame = pyqtSignal(object)   # numpy.ndarray (BGR/BGRA)
+    new_frame = pyqtSignal(object)     # numpy.ndarray (BGR/BGRA)
+    pose_results = pyqtSignal(object)  # List[PoseDetectionDTO]  (dict’ler)
 
     def __init__(self, logger: ILoggerPort, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._log: ILoggerPort = logger
+
+        # Reader
         self._proc: Optional[multiprocessing.Process] = None
         self._q: Optional[multiprocessing.Queue] = None
-        self._reason_q: Optional[multiprocessing.Queue] = None  # NEW
+        self._reason_q: Optional[multiprocessing.Queue] = None
         self._stop_evt: Optional[multiprocessing.Event] = None
 
-        # Ana döngüde kuyruğu poll eden timer (~60 Hz)
+        # AI
+        self._ai_proc: Optional[multiprocessing.Process] = None
+        self._pose_in_q: Optional[multiprocessing.Queue] = None
+        self._pose_out_q: Optional[multiprocessing.Queue] = None
+        self._pose_stop_evt: Optional[multiprocessing.Event] = None
+
+        # AI parametreleri (orchestrator)
+        self._pose_enabled: bool = True
+        self._pose_topk: int = 2
+        self._pose_conf_thr: float = 0.60       # bir kere loglama eşiği
+        self._pose_log_ttl_sec: float = 15.0    # görünmeyen track TTL
+
+        # Zaman tabanlı sampling: hedef AI FPS (örn. 10)
+        self._pose_target_fps: float = 10.0
+        self._pose_min_interval: float = 1.0 / max(1e-3, self._pose_target_fps)
+        self._last_ai_send_ts: float = 0.0
+
+        # Bir kere loglama state’i
+        self._pose_logged_by_track: Dict[int, set] = {}
+        self._pose_last_seen: Dict[int, float] = {}
+
+        # Poll timer (~60 Hz)
         self._poll = QTimer(self)
         self._poll.setInterval(16)
         self._poll.timeout.connect(self._poll_q)
 
-        # Başlangıç zaman aşımı (ilk kare bekleme)
+        # Startup timeout
         self._startup_timeout_timer: Optional[QTimer] = None
         self._first_frame_seen: bool = False
 
         self._cuda = _cuda_available()
         if self._cuda:
-            try:
-                self._log.info("[Cam] OpenCV-CUDA tespit edildi (GPU işleme etkin).")
-            except Exception:
-                pass
+            try: self._log.info("[Cam] OpenCV-CUDA tespit edildi (GPU işleme etkin).")
+            except Exception: pass
 
         self._wait_tmr: Optional[QTimer] = None
         self._wait_elapsed = 0  # ms
@@ -211,16 +308,40 @@ class OpenCVAdapter(QObject):
             self.failed.emit("Çözünürlük")
             return
 
-        # Pipeline string beklenir
+        # Kuyruklar
         self._q = multiprocessing.Queue(maxsize=1)          # düşük gecikme için 1
-        self._reason_q = multiprocessing.Queue(maxsize=4)   # NEW: neden mesajları
+        self._reason_q = multiprocessing.Queue(maxsize=4)
         self._stop_evt = multiprocessing.Event()
 
-        log_level = "INFO"
+        # AI process
+        if self._pose_enabled:
+            self._pose_in_q = multiprocessing.Queue(maxsize=1)
+            self._pose_out_q = multiprocessing.Queue(maxsize=1)
+            self._pose_stop_evt = multiprocessing.Event()
+            self._ai_proc = _PoseProcessorProcess(
+                in_q=self._pose_in_q,
+                out_q=self._pose_out_q,
+                stop_event=self._pose_stop_evt,
+                topk=self._pose_topk,
+                log_level="INFO",
+            )
+            self._ai_proc.daemon = True
+            try:
+                self._ai_proc.start()
+            except Exception as e:
+                self._log.error(f"[Cam] PoseProcessor başlatılamadı: {e}")
+                # Pose kapalı devam
+                self._pose_enabled = False
+                self._ai_proc = None
+                self._pose_in_q = None
+                self._pose_out_q = None
+                self._pose_stop_evt = None
 
-        # Process’i başlat
+        # ReaderProcess (BASİT)
         self._proc = _CameraReaderProcess(
-            src, (w, h), self._q, self._reason_q, self._stop_evt, self._cuda, log_level=log_level
+            src, (w, h),
+            self._q, self._reason_q, self._stop_evt, self._cuda,
+            log_level="INFO",
         )
         self._proc.daemon = True
         try:
@@ -228,35 +349,39 @@ class OpenCVAdapter(QObject):
         except Exception as e:
             self._log.error(f"[Cam] Kamera süreci başlatılamadı: {e}")
             self.failed.emit("Process")
+            self._stop_ai_process()
             return
 
-        # Başlangıç zaman aşımı: 20s içinde ilk kare gelmezse
+        # Startup timeout
         if self._startup_timeout_timer is None:
             self._startup_timeout_timer = QTimer(self)
             self._startup_timeout_timer.setSingleShot(True)
             self._startup_timeout_timer.timeout.connect(self._on_startup_timeout)
         self._first_frame_seen = False
-        self._startup_timeout_timer.start(20000)  # 20,000 ms
+        self._startup_timeout_timer.start(20000)  # 20s
+
+        # reset AI send ts
+        self._last_ai_send_ts = 0.0
 
         self._poll.start()
         self.started.emit()
-        self._log.info("[Cam] Kamera adaptörü başlatıldı.")
+        self._log.info("[Cam] Kamera adaptörü başlatıldı (orchestrator mode).")
 
     def stop(self):
-        if not self._proc:
-            return
-        try:
-            if self._stop_evt:
-                self._stop_evt.set()
-        except Exception:
-            pass
+        # Reader’ı durdur
+        if self._stop_evt:
+            try: self._stop_evt.set()
+            except Exception: pass
 
-        # Startup timeout timer’ını kapat (varsa)
+        # Startup timeout
         try:
             if self._startup_timeout_timer and self._startup_timeout_timer.isActive():
                 self._startup_timeout_timer.stop()
         except Exception:
             pass
+
+        # AI’yı durdur
+        self._stop_ai_process()
 
         if self._wait_tmr is None:
             self._wait_tmr = QTimer(self)
@@ -270,14 +395,40 @@ class OpenCVAdapter(QObject):
         self._poll.stop()
         self._log.info("[Cam] Kamera sürecinin kapanması bekleniyor…")
 
+    # -------------- AI yardımcıları --------------
+    def _stop_ai_process(self):
+        try:
+            if self._pose_stop_evt:
+                self._pose_stop_evt.set()
+        except Exception:
+            pass
+        # join
+        try:
+            if self._ai_proc and self._ai_proc.is_alive():
+                self._ai_proc.join(timeout=0.5)
+        except Exception:
+            pass
+        # terminate fallback
+        try:
+            if self._ai_proc and self._ai_proc.is_alive():
+                self._ai_proc.terminate()
+        except Exception:
+            pass
+        self._ai_proc = None
+        self._pose_in_q = None
+        self._pose_out_q = None
+        self._pose_stop_evt = None
+        # bir kere loglama hafızasını temizle
+        self._pose_logged_by_track.clear()
+        self._pose_last_seen.clear()
+        self._last_ai_send_ts = 0.0
+
     # -------------- callbacks & helpers --------------
     def _on_startup_timeout(self):
-        """20s boyunca ilk kare gelmediyse başarısız say."""
         if self._first_frame_seen:
             return
         if self._proc and self._proc.is_alive():
             self._log.error("[Cam] Kamera başlatma zaman aşımına uğradı (20s).")
-            # Temiz kapat ve UI’ya net mesaj ver
             self.stop()
             self.failed.emit("Başlatılamadı: Zaman Aşımı")
 
@@ -294,10 +445,8 @@ class OpenCVAdapter(QObject):
         self._wait_elapsed += 100
         if self._wait_elapsed >= 2000:
             self._log.warning("[Cam] Kamera süreci zorla sonlandırılıyor.")
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
+            try: self._proc.terminate()
+            except Exception: pass
             self._finalize_stop("forced")
 
     def _finalize_stop(self, reason: str):
@@ -316,11 +465,59 @@ class OpenCVAdapter(QObject):
         self.stopped.emit(reason)
         self._log.info(f"[Cam] Kamera adaptörü durdu: {reason}")
 
-    def _poll_q(self):
-        if not self._q:
-            return
+    @staticmethod
+    def _label_of(cid: int) -> Optional[str]:
+        if cid == 0: return "T-POSE"
+        if cid == 1: return "ARMS-UP"
+        return None
 
-        # Önce süreçten gelen "neden" mesajlarını boşalt (varsa)
+    def _apply_once_logging(self, dtos: List[Dict[str, Any]]):
+        """Bir kere loglama + TTL temizliği (adapter seviyesinde)"""
+        now = time.time()
+        # TTL temizliği
+        to_del = [tid for tid, ts in self._pose_last_seen.items() if now - ts > self._pose_log_ttl_sec]
+        for tid in to_del:
+            self._pose_last_seen.pop(tid, None)
+            self._pose_logged_by_track.pop(tid, None)
+
+        # Yeni sonuçlar
+        for d in dtos:
+            tid = int(d["track_id"])
+            cid = int(d["class_id"])
+            lbl = d.get("label")
+            cf  = float(d.get("conf", 0.0))
+            self._pose_last_seen[tid] = now
+            if lbl is None or cf < self._pose_conf_thr:
+                continue
+            done = self._pose_logged_by_track.setdefault(tid, set())
+            if lbl not in done:
+                if lbl == "T-POSE":
+                    msg = f"T-Pose tespit edildi, ilk yardım kiti bekleyen kişi saptandı! (track={tid}, conf={cf:.2f})"
+                else:
+                    msg = f"Arms-Up tespit edildi, ilk yardım kiti bekleyen kişi saptandı! (track={tid}, conf={cf:.2f})"
+                try: self._log.info(msg)
+                except Exception: pass
+                done.add(lbl)
+
+    # --- Orchestrator: UI & AI besleme ---
+    def _maybe_send_to_ai(self, frame) -> None:
+        if not self._pose_enabled or self._pose_in_q is None:
+            return
+        now = time.time()
+        if (now - self._last_ai_send_ts) < self._pose_min_interval:
+            return
+        # En taze kalsın
+        if self._pose_in_q.full():
+            try: self._pose_in_q.get_nowait()
+            except Exception: pass
+        try:
+            self._pose_in_q.put_nowait(frame)
+            self._last_ai_send_ts = now
+        except Exception:
+            pass
+
+    def _poll_q(self):
+        # 1) Reader'dan gelen "neden" mesajlarını boşalt
         if self._reason_q is not None:
             while True:
                 try:
@@ -330,34 +527,61 @@ class OpenCVAdapter(QObject):
                 except Exception:
                     break
                 else:
-                    # Süreç hata bildiriyor → UI’ya yansıt ve kapat
                     try:
                         self.failed.emit(str(reason))
                     finally:
-                        # Süreç hâlâ yaşıyor olabilir; nazikçe durdur
                         self.stop()
                         return
 
-        # Süreç çöktüyse ve sırada kare yoksa → failed
-        if self._proc and (not self._proc.is_alive()) and self._q.empty():
+        # 2) Reader çökmüşse ve kare yoksa → failed
+        if self._proc and (not self._proc.is_alive()) and self._q and self._q.empty():
             self._poll.stop()
             self.failed.emit("Kamera süreci bitti")
             return
 
+        # 3) FRAME KUYRUĞU: en son kareyi al
         last = None
-        while True:
-            try:
-                item = self._q.get_nowait()
-                last = item
-            except pyqueue.Empty:
-                break
-            except Exception:
-                break
+        if self._q is not None:
+            while True:
+                try:
+                    item = self._q.get_nowait()
+                    last = item
+                except pyqueue.Empty:
+                    break
+                except Exception:
+                    break
 
         if last is not None:
-            # İlk kare geldiyse startup timeout’u iptal et
+            # İlk kare → startup timeout iptal
             if (self._startup_timeout_timer is not None) and self._startup_timeout_timer.isActive():
                 self._startup_timeout_timer.stop()
             self._first_frame_seen = True
 
+            # UI'ya yolla
             self.new_frame.emit(last)
+
+            # AI'ya zaman-tabanlı yolla
+            try:
+                self._maybe_send_to_ai(last)
+            except Exception:
+                pass
+
+        # 4) AI ÇIKIŞ KUYRUĞU: en son DTO listesini al ve yay
+        if self._pose_out_q is not None:
+            last_dtos = None
+            while True:
+                try:
+                    dtos = self._pose_out_q.get_nowait()
+                    last_dtos = dtos
+                except pyqueue.Empty:
+                    break
+                except Exception:
+                    break
+
+            if last_dtos is not None:
+                # Bir kere loglama
+                try: self._apply_once_logging(last_dtos)
+                except Exception: pass
+                # UI’ya yay
+                try: self.pose_results.emit(last_dtos)
+                except Exception: pass
