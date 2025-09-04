@@ -1,5 +1,4 @@
 # adapters/mavlink/pymavlink_adapter.py
-
 from typing import Optional
 from queue import Queue, Empty
 
@@ -21,9 +20,9 @@ class _Worker(QObject):
     command_ack  = pyqtSignal(str, int)   # cmd_name, result
     raw_msg      = pyqtSignal(object)
 
-    def __init__(self, link_url: str, logger: ILoggerPort, cmd_q: Queue):
+    def __init__(self, link, logger: ILoggerPort, cmd_q: Queue):
         super().__init__()
-        self._url, self._logger, self._q = link_url, logger, cmd_q
+        self._link, self._logger, self._q = link, logger, cmd_q
         self._running = False
         self._master: Optional[mavutil.mavfile] = None
 
@@ -31,9 +30,23 @@ class _Worker(QObject):
     def run(self):
         # --- bağlantı ---
         try:
-            self._master = mavutil.mavlink_connection(self._url)
-            self._logger.info(f"Mavlink bağlantısı başarılı: {self._url}")
-            self.connected.emit(self._url)
+            kind = self._link.get("kind")
+            if kind == "serial":
+                device = self._normalize_serial_device(self._link["device"])
+                baud   = int(self._link.get("baud", 57600))
+                self._master = mavutil.mavlink_connection(device, baud=baud)
+                self._logger.info(f"Serial bağlı: {device} @ {baud}")
+                self.connected.emit(f"{device}@{baud}")
+
+            elif kind == "tcp":
+                host = self._link["host"]; port = int(self._link["port"])
+                self._master = mavutil.mavlink_connection(f"tcp:{host}:{port}")
+                self._logger.info(f"TCP bağlı: {host}:{port}")
+                self.connected.emit(f"tcp:{host}:{port}")
+
+            else:
+                raise RuntimeError(f"Bilinmeyen link türü: {kind}")
+
         except Exception as e:
             self._logger.error(f"Bağlantı hatası: {e}")
             self.failed.emit(str(e))
@@ -67,7 +80,7 @@ class _Worker(QObject):
                     self.command_ack.emit(cmd_name, msg.result)
 
                 elif msg.get_type() == "MISSION_ACK":
-                    result = msg.type  # 0=ACCEPTED, 1=ERROR, 2=UNSUPPORTED, 3=NO_SPACE
+                    result = msg.type
                     self.command_ack.emit("MISSION_ACK", result)
 
                 elif msg.get_type() == "STATUSTEXT":
@@ -96,6 +109,25 @@ class _Worker(QObject):
         self._running = False
         self.disconnected.emit(reason)
 
+    @staticmethod
+    def _normalize_serial_device(s: str) -> str:
+        """
+        UI'dan gelen metinden gerçek cihaz adını ayıkla.
+        Ör: 'Bağlanıyor… (COM3)' -> 'COM3'
+            'COM5' -> 'COM5'
+            '/dev/ttyUSB0' -> '/dev/ttyUSB0'
+        """
+        import re
+        s = s.strip()
+        m = re.search(r'(COM\d+)', s, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+        if s.startswith('/dev/'):
+            return s
+        if s.lower().startswith('serial:'):
+            return s.split(':', 1)[1]
+        return s
+
 
 # ====================================================================
 # Ana adapter ‒ main-thread
@@ -105,7 +137,7 @@ class PymavlinkAdapter(QObject):
     failed       = pyqtSignal(str)
     disconnected = pyqtSignal(str)
     telemetry    = pyqtSignal(dict)
-    command_ack  = pyqtSignal(str, int)  # cmd_name, result
+    command_ack  = pyqtSignal(str, int)
 
     def __init__(self, logger: ILoggerPort, parent=None):
         super().__init__(parent)
@@ -115,16 +147,15 @@ class PymavlinkAdapter(QObject):
         self._worker: Optional[_Worker] = None
         self._cmd_q: Queue = Queue()
 
-        # Telemetry ayrıştırıcı
         self._parser = MessageParser()
         self._parser.telemetry.connect(self.telemetry)
 
     # ---------- bağlantı kontrolü ----------
     def open_serial(self, port: str, baudrate: int):
-        self._start_worker(f"serial:{port}:{baudrate}")
+        self._start_worker({"kind": "serial", "device": port, "baud": baudrate})
 
     def open_tcp(self, host: str, tcp_port: int):
-        self._start_worker(f"tcp:{host}:{tcp_port}")
+        self._start_worker({"kind": "tcp", "host": host, "port": tcp_port})
 
     def close(self):
         if self._worker:
@@ -145,14 +176,13 @@ class PymavlinkAdapter(QObject):
         self._cmd_q.put(CommandFactory.set_servo(channel, pwm))
 
     # ---------- internal ----------
-    def _start_worker(self, url: str):
-        self.close()  # önceki worker varsa kapat
+    def _start_worker(self, link):
+        self.close()
 
         self._thread = QThread()
-        self._worker = _Worker(url, self._logger, self._cmd_q)
+        self._worker = _Worker(link, self._logger, self._cmd_q)
         self._worker.moveToThread(self._thread)
 
-        # köprüler
         self._worker.connected.connect(self.connected)
         self._worker.failed.connect(self.failed)
         self._worker.disconnected.connect(self.disconnected)

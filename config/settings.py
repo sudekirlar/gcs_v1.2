@@ -28,7 +28,7 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     )
 
     # 2) Test Videosu
-    video_uri = Path("source_videos/sample10.MOV").resolve().as_uri()
+    video_uri = Path("source_videos/sample1.mp4").resolve().as_uri()
     video_pipeline = (
         f"uridecodebin uri={video_uri} expose-all-streams=false ! "
         "videoconvert ! video/x-raw,format=BGR ! "
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     log_path : Path = Path("logs/gcs.log")
 
     # ----- Serial -----
-    baudrate: int = 115200
+    baudrate: int = 57600
 
     # ----- TCP/SITL -----
     tcp_host: str = "127.0.0.1"

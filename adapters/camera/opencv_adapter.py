@@ -87,6 +87,7 @@ class _CameraReaderProcess(multiprocessing.Process):
             pass
 
     def run(self):
+        os.environ["GST_DEBUG"] = "3,uridecodebin:5"
         logging.basicConfig(
             level=getattr(logging, self._log_level, logging.INFO),
             format="CamProc | %(levelname)s | %(message)s",
@@ -495,7 +496,7 @@ class OpenCVAdapter(QObject):
                     msg = f"T-Pose tespit edildi, ilk yardım kiti bekleyen kişi saptandı! (track={tid}, conf={cf:.2f})"
                 else:
                     msg = f"Arms-Up tespit edildi, ilk yardım kiti bekleyen kişi saptandı! (track={tid}, conf={cf:.2f})"
-                try: self._log.info(msg)
+                try: self._log.warning(msg)
                 except Exception: pass
                 done.add(lbl)
 

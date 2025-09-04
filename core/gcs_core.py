@@ -200,12 +200,17 @@ class GCSCore(QObject):
     # PORT BAĞLANTI
     # =================================================================
     def connect(self, descr: str):
+        import re
         if descr.startswith("TCP"):
             self._log.info("TCP bağlantı açılıyor (SITL)")
             self._mav.open_tcp(_cfg.tcp_host, _cfg.tcp_port)
         else:
-            self._log.info(f"Serial bağlantı açılıyor: {descr}")
-            self._mav.open_serial(descr, _cfg.baudrate)
+            port = descr.strip()
+            m = re.search(r'(COM\d+)', port, flags=re.IGNORECASE)
+            if m:
+                port = m.group(1).upper()
+            self._log.info(f"Serial bağlantı açılıyor: {port} @ {_cfg.baudrate}")
+            self._mav.open_serial(port, _cfg.baudrate)
 
     def disconnect(self):
         self._log.info("Bağlantı kapatılıyor")

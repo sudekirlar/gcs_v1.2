@@ -5,8 +5,8 @@ UI ► CameraController ◄ CameraCore
 • new_frame’de QLabel’e FPS + ms overlay’li görüntü basar
 • Pose sonuçlarını alır, kutu + etiket çizer (T-POSE: kırmızı, ARMS-UP: turuncu)
 • OPTIMIZATION:
-    1) Eskime kontrolü: pose_age > 0.250s ise kutular çizilmez (stale overlay yok)
-    2) Smoothing sırası: Önce QLabel koordinatına map, sonra OneEuro ile yumuşat
+    1) Per-tracker eskime: Her track_id için 'last_seen' tutulur; taze olmayan kutu çizilmez.
+    2) Smoothing sırası: Önce QLabel koordinatına map, sonra OneEuro ile yumuşat.
 """
 
 import time, math
@@ -126,10 +126,10 @@ class CameraController(QObject):
         self._ts_hist = deque(maxlen=30)
         self._last_ts = None
 
-        # Pose cache + eskime
-        self._latest_pose: List[dict] = []
-        self._last_pose_update_time: float = 0.0
-        self._pose_stale_max_sec: float = 0.250  # <<< kritik: 250 ms sonra overlay'i gizle
+        # --- Per-tracker pose cache ---
+        # track_id -> DTO (içine 'last_seen' eklenecek)
+        self._pose_cache: Dict[int, Dict] = {}
+        self._pose_stale_max_sec: float = 0.40  # 400 ms: “takılı kalma”yı pratikte bitirir
 
         # UI-space bbox smoother
         self._bbox_smoother = _BBoxSmoother(mincutoff=1.0, beta=0.007)
@@ -168,32 +168,46 @@ class CameraController(QObject):
 
         # Pose state reset
         if not running:
-            self._latest_pose = []
-            self._last_pose_update_time = 0.0
+            self._pose_cache.clear()
+            # Smoother state'ini de yumuşak bir reset ile temizleyelim
+            try:
+                self._bbox_smoother.gc(time.time(), ttl_sec=0.0)
+            except Exception:
+                pass
 
-    # ------------------------------ Pose sinyali
+    # ------------------------------ Pose sinyali (Per-tracker hafıza)
     @pyqtSlot(object)
     def on_pose_results(self, detections: object):
         """
         detections: List[PoseDetectionDTO] (dict)
         DTO: {track_id, class_id, label, bbox:(x,y,w,h), conf, ts}
         """
+        now = time.time()
+        if not isinstance(detections, list):
+            return
+
+        # 1) Gelen taze bilgileri cache'e işle
+        for d in detections:
+            try:
+                tid = d.get("track_id", None)
+                if tid is None:
+                    continue
+                tid = int(tid)
+
+                # DTO'ya UI-zamanlı last_seen ekle
+                d = dict(d)  # kopya al (yan etkisiz)
+                d["last_seen"] = now
+                self._pose_cache[tid] = d
+            except Exception:
+                # tek bir bozuk DTO tüm listeyi bozmasın
+                continue
+
+        # 2) Çok uzun süredir hiç gelmeyenleri cache'ten süpür (opsiyonel; bellek koruma)
         try:
-            # _latest_pose'u her zaman güncel tut:
-            # - Liste geldiyse: olduğu gibi ata (boş olsa bile)
-            # - Başka tip veya None geldiyse: boş listeye düş
-            self._latest_pose = detections if isinstance(detections, list) else []
-
-            # ESKİME KONTROLÜ:
-            # Sadece DOLU listede zaman damgasını güncelle.
-            # Boş listede güncelleme yok → 250 ms sonra overlay otomatik sönümlenir.
-            if self._latest_pose:
-                # DTO'larda ts varsa en büyüğünü kullan; yoksa 'now'
-                max_ts = max((float(d.get("ts", 0.0)) for d in self._latest_pose), default=0.0)
-                self._last_pose_update_time = max(max_ts, time.time())
-
+            old_ids = [tid for tid, data in self._pose_cache.items() if (now - data.get("last_seen", 0.0)) > 10.0]
+            for tid in old_ids:
+                self._pose_cache.pop(tid, None)
         except Exception:
-            # Sessiz düş; UI'yi kilitlemeyelim
             pass
 
     # ------------------------------ Yardımcı: frame→QLabel mapping (float)
@@ -261,16 +275,21 @@ class CameraController(QObject):
         painter.setPen(QPen(QColor(0, 0, 0), 2)); painter.drawText(6, 16, txt)
         painter.setPen(Qt.white);                 painter.drawText(5, 15, txt)
 
-        # ----- Pose çizimi (eskime kontrolü + UI-space smoothing) -----
+        # ----- Pose çizimi (Per-tracker eskime + UI-space smoothing) -----
         try:
-            # 1) Eskime kontrolü: sonuçlar çok eskidiyse hiç kutu çizme
-            pose_age = (now - self._last_pose_update_time) if self._last_pose_update_time > 0 else float("inf")
-            if pose_age <= self._pose_stale_max_sec and self._latest_pose:
-                # GC: uzun süredir görünmeyeni temizle
+            # 1) Çizilecek taze kutuları topla
+            to_draw: List[Dict] = []
+            for tid, data in self._pose_cache.items():
+                last_seen = float(data.get("last_seen", 0.0))
+                if (now - last_seen) <= self._pose_stale_max_sec:
+                    to_draw.append(data)
+
+            if to_draw:
+                # GC: uzun süredir görünmeyeni temizle (smoother tarafı)
                 self._bbox_smoother.gc(now, ttl_sec=8.0)
 
-                # Her detection için:
-                for d in self._latest_pose:
+                # 2) Taze olanları çiz
+                for d in to_draw:
                     cid  = int(d.get("class_id", -1))
                     bbox = d.get("bbox", None)
                     label = d.get("label", None)
@@ -300,10 +319,9 @@ class CameraController(QObject):
                     tx, ty = mx, max(14, my - 6)
                     painter.setPen(QPen(QColor(0,0,0), 3)); painter.drawText(tx+1, ty+1, text)
                     painter.setPen(Qt.white);               painter.drawText(tx, ty, text)
-            else:
-                # Çok eskimişse (veya hiç güncellenmediyse) overlay gizli kalsın
-                pass
+            # else: taze yoksa overlay çizme (doğal sönüm)
         except Exception:
+            # UI’yi kilitlemeyelim; hata ayıklamada loglayabilirsin.
             pass
 
         painter.end()
