@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self.sys_ctrl.start()
+        core.connection_closed.connect(lambda reason: self.tel_ctrl.reset())
 
 
     def closeEvent(self, event):  # <<<

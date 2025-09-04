@@ -13,6 +13,12 @@ class MessageParser(QObject):
         super().__init__(parent)
         self._last: Dict[str, float] = {}
 
+
+    @pyqtSlot()
+    def reset(self):
+        """Bağlantı döngülerinde diff cache’i sıfırla."""
+        self._last.clear()
+
     # ------------------------------------------------------------------
     @pyqtSlot(object)
     def parse(self, msg: mavutil.mavlink.MAVLink_message):

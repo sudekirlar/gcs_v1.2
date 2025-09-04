@@ -1,5 +1,4 @@
 # adapters/mavlink/pymavlink_adapter.py
-
 from typing import Optional
 from queue import Queue, Empty
 
@@ -32,6 +31,42 @@ class _Worker(QObject):
         # --- bağlantı ---
         try:
             self._master = mavutil.mavlink_connection(self._url)
+            # 1) Heartbeat bekle: target_system/component dolsun
+            self._master.wait_heartbeat(timeout=5)
+            self._logger.info("Heartbeat alındı; stream ayarlanıyor")
+
+            # 2) Geniş kapsamlı stream iste (eski yöntem)
+            try:
+                self._master.mav.request_data_stream_send(
+                    self._master.target_system,
+                    self._master.target_component,
+                    mavutil.mavlink.MAV_DATA_STREAM_ALL,
+                    10,  # Hz
+                    1    # start
+                )
+            except Exception as e:
+                self._logger.warning(f"request_data_stream gönderilemedi: {e}")
+
+            # 3) Kritik mesajlara SET_MESSAGE_INTERVAL (yeni yöntem)
+            try:
+                from pymavlink.dialects.v20 import ardupilotmega as apm
+
+                def set_interval(msg_id, hz):
+                    usec = int(1_000_000 / hz) if hz > 0 else -1
+                    self._master.mav.command_long_send(
+                        self._master.target_system, self._master.target_component,
+                        apm.MAV_CMD_SET_MESSAGE_INTERVAL,
+                        0, msg_id, usec, 0, 0, 0, 0, 0
+                    )
+
+                set_interval(apm.MAVLINK_MSG_ID_ATTITUDE,            20)  # yaw/pitch/roll
+                set_interval(apm.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 10)  # lat/lon/alt
+                set_interval(apm.MAVLINK_MSG_ID_VFR_HUD,              5)  # speed
+                set_interval(apm.MAVLINK_MSG_ID_GPS_RAW_INT,          1)  # hdop
+                set_interval(apm.MAVLINK_MSG_ID_SYS_STATUS,           1)  # batarya
+            except Exception as e:
+                self._logger.warning(f"SET_MESSAGE_INTERVAL gönderilemedi: {e}")
+
             self._logger.info(f"Mavlink bağlantısı başarılı: {self._url}")
             self.connected.emit(self._url)
         except Exception as e:
@@ -55,6 +90,13 @@ class _Worker(QObject):
 
                 # ===== Mesaj al =====
                 msg = self._master.recv_match(blocking=False, timeout=0.1)
+
+                # (Teşhis için) gelen mesaj tiplerini logla
+                if msg:
+                    try:
+                        self._logger.debug(f"[RAW] {msg.get_type()}")
+                    except Exception:
+                        pass
                 if not msg:
                     continue
 
@@ -67,7 +109,8 @@ class _Worker(QObject):
                     self.command_ack.emit(cmd_name, msg.result)
 
                 elif msg.get_type() == "MISSION_ACK":
-                    result = msg.type  # 0=ACCEPTED, 1=ERROR, 2=UNSUPPORTED, 3=NO_SPACE
+                    # 0=ACCEPTED, 1=ERROR, 2=UNSUPPORTED, 3=NO_SPACE
+                    result = msg.type
                     self.command_ack.emit("MISSION_ACK", result)
 
                 elif msg.get_type() == "STATUSTEXT":
@@ -158,6 +201,10 @@ class PymavlinkAdapter(QObject):
         self._worker.disconnected.connect(self.disconnected)
         self._worker.command_ack.connect(self.command_ack)
         self._worker.raw_msg.connect(self._parser.parse)
+
+        # parser diff cache: bağlantı açılış/kapanışta temizle
+        self._worker.connected.connect(lambda *_: self._parser.reset())
+        self._worker.disconnected.connect(lambda *_: self._parser.reset())
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()

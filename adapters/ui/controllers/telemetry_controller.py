@@ -84,3 +84,19 @@ class TelemetryController(QObject):
                 bar.setStyleSheet(css)
                 bar.setTextVisible(True)
                 self._last_band = band
+
+    def reset(self):
+        # sayısal metinler
+        for key in ["yaw", "pitch", "roll", "lat", "lon", "alt", "spd", "hdop", "mode"]:
+            if key in self._w:
+                self._w[key].setText("—")
+        # batarya
+        if "bat" in self._w:
+            bar = self._w["bat"]
+            bar.setValue(0)
+            bar.setFormat("N/A")
+        # dahili cache'leri temizle
+        self._last_bat_v = None
+        self._last_pct_val = None
+        self._last_band = None
+        self._last_text = None

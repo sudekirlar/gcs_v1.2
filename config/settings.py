@@ -28,13 +28,7 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     )
 
     # 2) Test Videosu
-    video_uri = Path("source_videos/sample10.MOV").resolve().as_uri()
-    video_pipeline = (
-        f"uridecodebin uri={video_uri} expose-all-streams=false ! "
-        "videoconvert ! video/x-raw,format=BGR ! "
-        "appsink drop=true max-buffers=1 sync=true"
-    )
-
+   #
     # 3) SIYI A8 – UDP/RTP (Kısa Yol ile Optimize Edilmiş)
     # siyi_udp_pipeline = (
     #     "udpsrc port=5000 caps=\"application/x-rtp, encoding-name=H264, payload=96\" ! "
@@ -53,7 +47,7 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
 
     return (
         CameraSource(name="Laptop Kamerası", path=laptop_pipeline),
-        CameraSource(name="Test Videosu",    path=video_pipeline),
+        #CameraSource(name="Test Videosu",    path=video_pipeline),
         CameraSource(name="SIYI A8 (UDP)",   path=siyi_udp_pipeline),
     )
 

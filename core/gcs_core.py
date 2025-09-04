@@ -75,6 +75,9 @@ class GCSCore(QObject):
     # =================================================================
     @pyqtSlot(dict)
     def _on_telemetry(self, d: Dict[str, Any]):
+
+
+
         if "alt" in d:
             self._current_alt = float(d["alt"])
 
