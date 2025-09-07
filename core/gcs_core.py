@@ -55,9 +55,15 @@ class GCSCore(QObject):
         self._servo_pwm: int = 1750
         self._release_done: bool = False
 
+        self._post_release_delay_ms: int = 15_000  # 15 sn (servo sonrası)
+
         self._arrival_timer = QTimer(self)
         self._arrival_timer.setSingleShot(True)
         self._arrival_timer.timeout.connect(self._release_payload)
+
+        self._post_release_timer = QTimer(self)
+        self._post_release_timer.setSingleShot(True)
+        self._post_release_timer.timeout.connect(self._do_post_release_action)
 
         # MAVLink sinyalleri
         mav_adapter.connected.connect(self.connection_opened)
@@ -240,7 +246,28 @@ class GCSCore(QObject):
         if self._release_done:
             return
         self._release_done = True
-        self._log.info(f"► 15 sn doldu. Yük bırakılıyor: SERVO {self._servo_channel} → PWM {self._servo_pwm}")
+        self._log.info(
+            f"► {self._wait_before_release_ms / 1000:.0f} sn doldu. Yük bırakılıyor: "
+            f"SERVO {self._servo_channel} → PWM {self._servo_pwm}"
+        )
         self._mav.set_servo(self._servo_channel, self._servo_pwm)
-        # İstersen kapama için küçük bir single-shot daha ekleyebilirsin (örn. 1 sn sonra 1100 µs),
-        # benden istek gelmediği için tek tetik ile bıraktım.
+
+        # >>> YENİ: Bırakım sonrası bekle → mod değiştir (RTL veya LAND)
+        self._log.info(f"► Bırakım sonrası {self._post_release_delay_ms / 1000:.0f} sn bekleniyor…")
+        if self._post_release_timer.isActive():
+            self._post_release_timer.stop()
+        self._post_release_timer.start(self._post_release_delay_ms)
+
+    def _do_post_release_action(self):
+        try:
+            # RTL (UI'daki set_mode akışını kullanır)
+            # self._log.info("► Post-release eylem: set_mode('RTL') gönderiliyor…")
+            # self.set_mode("RTL")
+
+            # LAND tercih edilecekse:
+            self._log.info("► Post-release eylem: set_mode('LAND') gönderiliyor…")
+            self.set_mode("LAND")
+
+        except Exception as e:
+            self._log.error(f"Post-release eylem hatası: {e}")
+

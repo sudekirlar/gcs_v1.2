@@ -44,17 +44,33 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     #     "videoconvert ! video/x-raw,format=BGR ! "
     #     "appsink drop=true max-buffers=1 sync=false"
     # )
-    siyi_udp_pipeline = (
-        "udpsrc port=5000 caps=\"application/x-rtp, encoding-name=H264, payload=96\" ! "
-        "rtph264depay ! h264parse ! decodebin ! "  # decodebin'e işi bırakıyoruz
-        "videoconvert ! video/x-raw,format=BGR ! "
-        "appsink drop=true max-buffers=1 sync=false"
+
+    # RTSP hali
+    # siyi_rtsp_pipeline = (
+    #     'rtspsrc location="rtsp://192.168.144.25:8554/main.264" latency=80 protocols=udp ! '
+    #     'rtph264depay ! h264parse ! decodebin ! '
+    #     'videoconvert ! video/x-raw,format=BGR ! '
+    #     'appsink drop=true max-buffers=1 sync=false'
+    # )
+
+    siyi_rtsp_pipeline = (
+        'rtspsrc location="rtsp://192.168.144.25:8554/main.264" latency=0 protocols=udp ! '
+        'rtph264depay ! h264parse ! decodebin ! '
+        'videoconvert ! video/x-raw,format=BGR ! '
+        'appsink drop=true max-buffers=1 sync=false'
     )
+
+    # siyi_udp_pipeline = (
+    #     "udpsrc port=5000 caps=\"application/x-rtp, encoding-name=H264, payload=96\" ! "
+    #     "rtph264depay ! h264parse ! decodebin ! "  # decodebin'e işi bırakıyoruz
+    #     "videoconvert ! video/x-raw,format=BGR ! "
+    #     "appsink drop=true max-buffers=1 sync=false"
+    # )
 
     return (
         CameraSource(name="Laptop Kamerası", path=laptop_pipeline),
         CameraSource(name="Test Videosu",    path=video_pipeline),
-        CameraSource(name="SIYI A8 (UDP)",   path=siyi_udp_pipeline),
+        CameraSource(name="SIYI A8 (UDP)",   path=siyi_rtsp_pipeline),
     )
 
 
