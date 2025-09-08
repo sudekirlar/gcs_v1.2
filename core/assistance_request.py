@@ -2,8 +2,7 @@
 
 from dataclasses import dataclass
 
-# slots=True KALDIRILDI
-@dataclass(frozen=True)                 # ← bu satır
+@dataclass(frozen=True)
 class AssistanceRequest:
     tc: str
     lat: float

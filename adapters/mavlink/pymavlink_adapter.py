@@ -7,28 +7,25 @@ from pymavlink import mavutil
 
 from core.ports.logger_port import ILoggerPort
 from adapters.mavlink.helpers.message_parser import MessageParser
-from adapters.mavlink.helpers.command_factory import CommandFactory, Command  # ("ARM", {...})
+from adapters.mavlink.helpers.command_factory import CommandFactory, Command
 
-
-# ====================================================================
-# Thread-worker: I/O + komut kuyruğu + COMMAND_ACK dinleme
-# ====================================================================
 class _Worker(QObject):
     connected    = pyqtSignal(str)
     failed       = pyqtSignal(str)
     disconnected = pyqtSignal(str)
-    command_ack  = pyqtSignal(str, int)   # cmd_name, result
+    command_ack  = pyqtSignal(str, int)
     raw_msg      = pyqtSignal(object)
 
-    def __init__(self, link, logger: ILoggerPort, cmd_q: Queue):
+    def __init__(self, link, logger: ILoggerPort, cmd_q: Queue): # Worker oluşturulurken ona bağlantı bilgileri (link), log nesnesi ve iletişim kuracağı komut kuyruğunu veriyoruz.
         super().__init__()
         self._link, self._logger, self._q = link, logger, cmd_q
-        self._running = False
-        self._master: Optional[mavutil.mavfile] = None
+        self._running = False  # Worker'ın çalışma bayrağı. stop() ile tetiklenir.
+        self._master: Optional[mavutil.mavfile] = None # Ana bağlantı nesnemizi tutmak için değişken.
 
+    # Thread başladığında burası başlar ve worker burada yaşar.
     @pyqtSlot()
     def run(self):
-        # --- bağlantı ---
+        # link dict'indeki bilgilere göre bir açma düzeni belirleyelim.
         try:
             kind = self._link.get("kind")
             if kind == "serial":
@@ -55,9 +52,9 @@ class _Worker(QObject):
         self._running = True
         try:
             while self._running:
-                # ===== Kuyruktan komut gönder =====
                 try:
-                    cmd: Command = self._q.get_nowait()
+                    # Döngünün her turunda komut kuyruğunu kontrol ediyoruz ve bir komut varsa bunu command factory tarafına gönderiyoruz.
+                    cmd: Command = self._q.get_nowait() # nowait() ile eğer kuyruk boşsa program beklemez.
                     try:
                         CommandFactory.to_mavlink(self._master, cmd)
                         self._logger.info(f"{cmd[0]} MAVLink'e gönderildi")
@@ -66,11 +63,12 @@ class _Worker(QObject):
                 except Empty:
                     pass
 
-                # ===== Mesaj al =====
-                msg = self._master.recv_match(blocking=False, timeout=0.1)
+                # Drone'da bir mesaj var mı kontrol edelim.
+                msg = self._master.recv_match(blocking=False, timeout=0.1) # blocking False ile burada takılıp kalmayız.
                 if not msg:
                     continue
 
+                # Gelen mesaj türüne göre işlem yapalım.
                 if msg.get_type() == "COMMAND_ACK":
                     try:
                         cmd_enum = mavutil.mavlink.enums['MAV_CMD'][msg.command]
@@ -110,13 +108,7 @@ class _Worker(QObject):
         self.disconnected.emit(reason)
 
     @staticmethod
-    def _normalize_serial_device(s: str) -> str:
-        """
-        UI'dan gelen metinden gerçek cihaz adını ayıkla.
-        Ör: 'Bağlanıyor… (COM3)' -> 'COM3'
-            'COM5' -> 'COM5'
-            '/dev/ttyUSB0' -> '/dev/ttyUSB0'
-        """
+    def _normalize_serial_device(s: str) -> str: # En son alınan COM Port bağlantı başarısız çözümü için eklendi.
         import re
         s = s.strip()
         m = re.search(r'(COM\d+)', s, flags=re.IGNORECASE)
@@ -128,10 +120,6 @@ class _Worker(QObject):
             return s.split(':', 1)[1]
         return s
 
-
-# ====================================================================
-# Ana adapter ‒ main-thread
-# ====================================================================
 class PymavlinkAdapter(QObject):
     connected    = pyqtSignal(str)
     failed       = pyqtSignal(str)
@@ -147,10 +135,9 @@ class PymavlinkAdapter(QObject):
         self._worker: Optional[_Worker] = None
         self._cmd_q: Queue = Queue()
 
-        self._parser = MessageParser()
-        self._parser.telemetry.connect(self.telemetry)
+        self._parser = MessageParser() # Gelen ham mesajı inceleyecek utility.
+        self._parser.telemetry.connect(self.telemetry) # Buradaki telemetri verisi oraya bağlanır.
 
-    # ---------- bağlantı kontrolü ----------
     def open_serial(self, port: str, baudrate: int):
         self._start_worker({"kind": "serial", "device": port, "baud": baudrate})
 
@@ -164,7 +151,7 @@ class PymavlinkAdapter(QObject):
             self._thread.quit()
             self._thread.wait()
 
-    # ---------- yüksek-seviye komut API ----------
+    # Bu komutlar sadece API sağlar. Tek iş, komutları kuyruğa koymaktır.
     def arm(self):                 self._cmd_q.put(CommandFactory.arm())
     def disarm(self):              self._cmd_q.put(CommandFactory.disarm())
     def land(self):                self._cmd_q.put(CommandFactory.land())
@@ -175,13 +162,12 @@ class PymavlinkAdapter(QObject):
     def set_servo(self, channel: int, pwm: int):
         self._cmd_q.put(CommandFactory.set_servo(channel, pwm))
 
-    # ---------- internal ----------
     def _start_worker(self, link):
-        self.close()
+        self.close() # Önce varsa eskiyi kapat.
 
-        self._thread = QThread()
+        self._thread = QThread() # Bir QThread ve Worker nesnesi oluşturalım.
         self._worker = _Worker(link, self._logger, self._cmd_q)
-        self._worker.moveToThread(self._thread)
+        self._worker.moveToThread(self._thread) # Worker nesnesinin tüm olaylarının ve slot'larının artık _thread üzerinde çalışacağını belirtelim.
 
         self._worker.connected.connect(self.connected)
         self._worker.failed.connect(self.failed)
@@ -191,3 +177,6 @@ class PymavlinkAdapter(QObject):
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
+
+# Ana thread'den worker thread'ine komut göndermek için bir kuyruk (Queue) kullandık.
+# Worker thread'inden ana thread'e bilgi (telemetri, bağlantı durumu vb.) aktarmak için ise PyQt'nun sinyal-slot mekanizmasından yararlandık.

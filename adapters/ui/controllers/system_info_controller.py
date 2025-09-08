@@ -10,18 +10,18 @@ from typing import Optional
 from PyQt5.QtCore import QObject, QTimer, QLocale, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QLabel
 
+# Hava durumu verisini çeken requests çağrısını ayrı bir arka plan thread'ine taşıyarak çözdüm.
+# Bu thread, işini bitirdiğinde sonucu ana thread'e bildirmek için PyQt'nun thread-güvenli sinyal-slot mekanizmasını kullanır.
+# Arka plan thread'i emit ile bir sinyal yayar, ana thread'deki bir slot ise bu sinyali yakalar ve arayüzü günceller.
 
-# ---------------- Data taşıyıcıları ----------------
 @dataclass
-class WeatherResult:
+class WeatherResult: # API'dan gelen hava durumu verisini yapısal bir şekilde tutar.
     city: Optional[str]
     temp_c: Optional[float]
     code: Optional[int]
     desc: str
-    icon: str  # emoji
+    icon: str
 
-
-# ---------------- Weathercode → ikon/açıklama ----------------
 def _weathercode_to_icon_desc(code: int):
     table = {
         0:  ("☀️", "Açık"),
@@ -58,7 +58,7 @@ def _weathercode_to_icon_desc(code: int):
 # Controller (yalnızca .env → Settings kullanır)
 # ==============================================================
 class SystemInfoController(QObject):
-    _weather_ready = pyqtSignal(object)  # WeatherResult
+    _weather_ready = pyqtSignal(object)  # Bu, arka plan thread'i ile ana thread arasındaki iletişim kanalıdır. Arka planda hava durumu verisi çekildiğinde, bu sinyal WeatherResult nesnesi ile birlikte yayılır.
 
     def __init__(
         self,
@@ -76,7 +76,6 @@ class SystemInfoController(QObject):
         self._cfg = settings
         self._log = logger
 
-        # Locale (TR tarih)
         try:
             locale.setlocale(locale.LC_TIME, "")
         except Exception:
@@ -86,31 +85,26 @@ class SystemInfoController(QObject):
         # Ayarlar
         self._weather_timeout = getattr(self._cfg, "weather_timeout_sec", 3)
 
-        # Timer (saat/tarih)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_tick)
 
         self._weather_ready.connect(self._on_weather_ready)
 
-    # ------------- Public -------------
     def start(self):
         self._on_tick()
         self._timer.start()
         if getattr(self._cfg, "weather_enabled", True):
             self._fetch_weather_once_async()
 
-    # ------------- Zaman/Tarih -------------
     @pyqtSlot()
     def _on_tick(self):
         now = datetime.datetime.now()
         self._time_label.setText(now.strftime("%H:%M:%S"))
-        # Hafta günü istemiyorsun diye sade format
         self._date_label.setText(self._qloc.toString(now.date(), "dd MMM yyyy"))
 
-    # ------------- Weather (only once; sadece .env) -------------
-    def _fetch_weather_once_async(self):
-        threading.Thread(target=self._weather_job_env_only, daemon=True).start()
+    def _fetch_weather_once_async(self): # Bu metod arka plan thread'inde çalışır.
+        threading.Thread(target=self._weather_job_env_only, daemon=True).start() # Ana uygulama kapandığında bu arka plan thread'inin de otomatik olarak sonlanmasını daemon ile sağlıyoruz.
 
     def _weather_job_env_only(self):
         try:
@@ -139,7 +133,7 @@ class SystemInfoController(QObject):
             self._weather_ready.emit(WeatherResult(city=getattr(self._cfg, "default_city", None),
                                                    temp_c=None, code=None, desc="Hata", icon="⚠️"))
 
-    # ------------- Helpers -------------
+    # Muhtemel bloklayıcı normalde buradaydı. (Blocking) Thread ile çözüldü.
     def _get_open_meteo_weather(self, lat: float, lon: float) -> WeatherResult:
         url = (
             "https://api.open-meteo.com/v1/forecast"
@@ -155,8 +149,7 @@ class SystemInfoController(QObject):
         icon, desc = _weathercode_to_icon_desc(int(code) if code is not None else -1)
         return WeatherResult(city=None, temp_c=temp, code=code, desc=desc, icon=icon)
 
-    # ------------- UI güncelle -------------
-    @pyqtSlot(object)
+    @pyqtSlot(object) # Ana thread'de çalışır.
     def _on_weather_ready(self, w: WeatherResult):
         pieces = []
         if w.city:

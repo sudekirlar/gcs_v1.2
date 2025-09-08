@@ -9,7 +9,7 @@ class CameraCore(QObject):
     camera_started = pyqtSignal()
     camera_stopped = pyqtSignal(str)
     camera_failed  = pyqtSignal(str)
-    # NEW: Pose sonuçlarını Core üzerinden de yayınlayalım (Controller buradan dinleyecek)
+    # Pose sonuçlarını Core üzerinden de yayınlayalım (Controller buradan dinleyecek)
     camera_pose_results = pyqtSignal(object)  # List[PoseDetectionDTO]
 
     def __init__(
@@ -26,11 +26,10 @@ class CameraCore(QObject):
         camera_adapter.stopped.connect(self.camera_stopped)
         camera_adapter.failed .connect(self.camera_failed)
 
-        # NEW: Pose sinyali
+        # Pose sinyali
         try:
             camera_adapter.pose_results.connect(self.camera_pose_results)
         except Exception:
-            # Eski adapter’lar için savunmacı
             pass
 
     def start_camera(self, source_path: str, resolution_str: str) -> None:

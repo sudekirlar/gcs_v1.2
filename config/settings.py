@@ -6,19 +6,12 @@ from typing import Tuple, Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
-# ---------- Alt modeller ----------
 class CameraSource(BaseModel):
     name: str
     path: str
 
 def _default_cam_sources() -> Tuple[CameraSource, ...]:
-    """
-    Windows için GStreamer pipeline’ları:
-      1) Laptop Kamerası (ksvideosrc)
-      2) Test Videosu (uridecodebin)
-      3) SIYI A8 (UDP/RTP H.264) → NVDEC (nvh264dec) tercihli
-    """
+
     # 1) Laptop Kamera
     laptop_pipeline = (
         "ksvideosrc device-index=0 ! "
@@ -73,27 +66,19 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
         CameraSource(name="SIYI A8 (UDP)",   path=siyi_rtsp_pipeline),
     )
 
-
-
-# ---------- Ana ayarlar ----------
 class Settings(BaseSettings):
-    # ----- Logging -----
     log_level: str = "INFO"
     log_path : Path = Path("logs/gcs.log")
 
-    # ----- Serial -----
     baudrate: int = 57600
 
-    # ----- TCP/SITL -----
     tcp_host: str = "127.0.0.1"
     tcp_port: int = 5760
 
-    # ----- Firebase -----
-    firebase_credentials_json_path: Path  # .env ⇒ FIREBASE_CREDENTIALS_JSON_PATH
-    firebase_db_url: str                  # .env ⇒ FIREBASE_DB_URL
-    firebase_db_path: str = "/mobil"      # .env ⇒ FIREBASE_DB_PATH
+    firebase_credentials_json_path: Path  # .env : FIREBASE_CREDENTIALS_JSON_PATH
+    firebase_db_url: str                  # .env : FIREBASE_DB_URL
+    firebase_db_path: str = "/mobil"      # .env : FIREBASE_DB_PATH
 
-    # ----- Kamera -----
     camera_sources: Tuple[CameraSource, ...] = Field(
         default_factory=_default_cam_sources
     )
@@ -101,15 +86,15 @@ class Settings(BaseSettings):
         "640x480", "1280x720", "1920x1080"
     )
 
-    # ----- Pydantic -----
+    # Pydantic
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        # env_prefix=""  # istersen tüm env’lere ortak prefix ekleyebilirsin
-        extra="forbid"   # bilinmeyen env değişkenlerini reddetmeye devam eder
+        # env_prefix=""
+        extra="forbid"
     )
 
-    # ----- Sistem Bilgileri / Hava Durumu -----
+    # Sistem Bilgileri / Hava Durumu
     weather_enabled: bool = True
     weather_timeout_sec: int = 3
 

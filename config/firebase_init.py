@@ -1,14 +1,14 @@
+# config/firebase_init.py
+
 import firebase_admin
 from firebase_admin import credentials
 from pathlib import Path
 
 from config.settings import Settings
 
+# Uygulama boyunca bir kez çağrılır. .env’te belirtilen anahtar yolu ve DB URL’siyle Firebase Admin başlatır.
 def init_firebase() -> None:
-    """
-    Uygulama boyunca bir kez çağrılır.
-    .env’te belirtilen anahtar yolu ve DB URL’siyle Firebase Admin başlatır.
-    """
+
     if firebase_admin._apps:
         return  # zaten başlatıldı
 

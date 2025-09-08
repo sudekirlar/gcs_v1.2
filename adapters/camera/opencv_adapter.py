@@ -34,18 +34,14 @@ def _cuda_available() -> bool:
         return False
 
 
-# ==================== Reader Process (BASİT) ====================
+# Tek sorumluluğu vardır: GStreamer pipeline'dan kare okuyup frame_q'ya yazmak.
 class _CameraReaderProcess(multiprocessing.Process):
-    """
-    Tek sorumluluk: GStreamer pipeline'dan kare okuyup frame_q'ya yazmak.
-    AI besleme, sampling vs. YOK — hepsi OpenCVAdapter'da.
-    """
     def __init__(
         self,
         source: str,                        # GStreamer pipeline STRING
-        resolution_wh: Tuple[int, int],     # QLabel’e uydurmak için post-resize (UI zaten ölçekler)
+        resolution_wh: Tuple[int, int],
         frame_q: multiprocessing.Queue,
-        reason_q: multiprocessing.Queue,     # süreçten neden bilgisi
+        reason_q: multiprocessing.Queue,
         stop_event: multiprocessing.Event,
         use_cuda: bool,
         log_level: str = "INFO",
@@ -56,7 +52,7 @@ class _CameraReaderProcess(multiprocessing.Process):
         self._log_level = log_level
 
     def _setup_gstreamer_env(self, log: logging.Logger) -> None:
-        # 1) DLL yolu (Windows – zorunlu)
+        # 1) DLL yolu (Windows – zorunlu) (Manuel Derlemeden zorunlu şablonumuz)
         gst_bin_path = r"C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
         try:
             if hasattr(os, "add_dll_directory") and os.path.exists(gst_bin_path):
@@ -149,13 +145,8 @@ class _CameraReaderProcess(multiprocessing.Process):
             log.info("Kamera okuma süreci kapandı.")
 
 
-# ==================== Pose Processor Process ====================
+# Gelen queue'dan frame'leri alır ve ve mediapipe+yolo tarafına gönderir. Buradan gelen çıktıyı out queue içine yazar.
 class _PoseProcessorProcess(multiprocessing.Process):
-    """
-    AI process: MultiPoseManager burada yaşar.
-    in_q: frame (np.ndarray BGR), maxsize=1
-    out_q: List[DTO], maxsize=1
-    """
     def __init__(
         self,
         in_q: multiprocessing.Queue,
@@ -239,37 +230,37 @@ class _PoseProcessorProcess(multiprocessing.Process):
             log.info("PoseProcessor kapandı.")
 
 
-# ==================== OpenCV Adapter (Orchestrator) ====================
+# Buranın yöneticisi.
 class OpenCVAdapter(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal(str)
     failed  = pyqtSignal(str)
-    new_frame = pyqtSignal(object)     # numpy.ndarray (BGR/BGRA)
-    pose_results = pyqtSignal(object)  # List[PoseDetectionDTO]  (dict’ler)
+    new_frame = pyqtSignal(object)
+    pose_results = pyqtSignal(object)
 
     def __init__(self, logger: ILoggerPort, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._log: ILoggerPort = logger
 
-        # Reader
+        # Reader taraf
         self._proc: Optional[multiprocessing.Process] = None
         self._q: Optional[multiprocessing.Queue] = None
         self._reason_q: Optional[multiprocessing.Queue] = None
         self._stop_evt: Optional[multiprocessing.Event] = None
 
-        # AI
+        # AI tarafı
         self._ai_proc: Optional[multiprocessing.Process] = None
         self._pose_in_q: Optional[multiprocessing.Queue] = None
         self._pose_out_q: Optional[multiprocessing.Queue] = None
         self._pose_stop_evt: Optional[multiprocessing.Event] = None
 
-        # AI parametreleri (orchestrator)
+        # AI parametreleri
         self._pose_enabled: bool = True
         self._pose_topk: int = 2
         self._pose_conf_thr: float = 0.60       # bir kere loglama eşiği
         self._pose_log_ttl_sec: float = 15.0    # görünmeyen track TTL
 
-        # Zaman tabanlı sampling: hedef AI FPS (örn. 10)
+        # Zaman tabanlı sampling: hedef AI FPS
         self._pose_target_fps: float = 10.0
         self._pose_min_interval: float = 1.0 / max(1e-3, self._pose_target_fps)
         self._last_ai_send_ts: float = 0.0
@@ -278,7 +269,7 @@ class OpenCVAdapter(QObject):
         self._pose_logged_by_track: Dict[int, set] = {}
         self._pose_last_seen: Dict[int, float] = {}
 
-        # Poll timer (~60 Hz)
+        # Poll timer (yaklaşık 60hz)
         self._poll = QTimer(self)
         self._poll.setInterval(16)
         self._poll.timeout.connect(self._poll_q)
@@ -295,13 +286,11 @@ class OpenCVAdapter(QObject):
         self._wait_tmr: Optional[QTimer] = None
         self._wait_elapsed = 0  # ms
 
-    # ---------------- public API ----------------
     def start(self, src: str, res: str):
         # Zaten çalışıyorsa kapat
         if self._proc and self._proc.is_alive():
             self.stop()
 
-        # Çözünürlük parse
         try:
             w, h = map(int, res.lower().replace('×', 'x').split('x'))
         except Exception:
@@ -338,7 +327,7 @@ class OpenCVAdapter(QObject):
                 self._pose_out_q = None
                 self._pose_stop_evt = None
 
-        # ReaderProcess (BASİT)
+        # ReaderProcess
         self._proc = _CameraReaderProcess(
             src, (w, h),
             self._q, self._reason_q, self._stop_evt, self._cuda,
@@ -374,7 +363,6 @@ class OpenCVAdapter(QObject):
             try: self._stop_evt.set()
             except Exception: pass
 
-        # Startup timeout
         try:
             if self._startup_timeout_timer and self._startup_timeout_timer.isActive():
                 self._startup_timeout_timer.stop()
@@ -396,7 +384,6 @@ class OpenCVAdapter(QObject):
         self._poll.stop()
         self._log.info("[Cam] Kamera sürecinin kapanması bekleniyor…")
 
-    # -------------- AI yardımcıları --------------
     def _stop_ai_process(self):
         try:
             if self._pose_stop_evt:
@@ -424,7 +411,6 @@ class OpenCVAdapter(QObject):
         self._pose_last_seen.clear()
         self._last_ai_send_ts = 0.0
 
-    # -------------- callbacks & helpers --------------
     def _on_startup_timeout(self):
         if self._first_frame_seen:
             return
@@ -473,7 +459,6 @@ class OpenCVAdapter(QObject):
         return None
 
     def _apply_once_logging(self, dtos: List[Dict[str, Any]]):
-        """Bir kere loglama + TTL temizliği (adapter seviyesinde)"""
         now = time.time()
         # TTL temizliği
         to_del = [tid for tid, ts in self._pose_last_seen.items() if now - ts > self._pose_log_ttl_sec]
@@ -500,7 +485,6 @@ class OpenCVAdapter(QObject):
                 except Exception: pass
                 done.add(lbl)
 
-    # --- Orchestrator: UI & AI besleme ---
     def _maybe_send_to_ai(self, frame) -> None:
         if not self._pose_enabled or self._pose_in_q is None:
             return
@@ -518,7 +502,6 @@ class OpenCVAdapter(QObject):
             pass
 
     def _poll_q(self):
-        # 1) Reader'dan gelen "neden" mesajlarını boşalt
         if self._reason_q is not None:
             while True:
                 try:
@@ -534,7 +517,7 @@ class OpenCVAdapter(QObject):
                         self.stop()
                         return
 
-        # 2) Reader çökmüşse ve kare yoksa → failed
+        # 2) Reader çökmüşse ve kare yoksa: failed
         if self._proc and (not self._proc.is_alive()) and self._q and self._q.empty():
             self._poll.stop()
             self.failed.emit("Kamera süreci bitti")
@@ -553,7 +536,6 @@ class OpenCVAdapter(QObject):
                     break
 
         if last is not None:
-            # İlk kare → startup timeout iptal
             if (self._startup_timeout_timer is not None) and self._startup_timeout_timer.isActive():
                 self._startup_timeout_timer.stop()
             self._first_frame_seen = True
@@ -561,7 +543,7 @@ class OpenCVAdapter(QObject):
             # UI'ya yolla
             self.new_frame.emit(last)
 
-            # AI'ya zaman-tabanlı yolla
+            # AI'ya zaman tabanlı yolla
             try:
                 self._maybe_send_to_ai(last)
             except Exception:

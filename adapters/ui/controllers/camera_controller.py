@@ -27,7 +27,9 @@ PenRed    = QPen(ColorRed, 2)
 PenOrange = QPen(ColorOrange, 2)
 PenGrey   = QPen(ColorGrey, 2)
 
-# ===================== OneEuro (UI smoothing) =====================
+# OneEuro, sinyal işlemede kullanılan, gürültülü bir sinyali gerçek zamanlı olarak yumuşatmak için tasarlanmış bir filtredir.
+# Özellikle insan hareketleri gibi değişken hızlara sahip sinyaller için optimize edilmiştir.
+# Yavaş hareketlerde gecikmeyi az tutarken, hızlı hareketlerde titremeyi engeller.
 class _OneEuro:
     @staticmethod
     def _alpha(cutoff: float, freq: float) -> float:
@@ -54,11 +56,11 @@ class _OneEuro:
         self._xp = xh; self._tp = t
         return float(xh)
 
+# _BBoxSmoother'ın görevi, her bir tespit edilen kişi için (track_id ile ayırt edilir) ayrı bir filtre seti (x, y, w, h için dört adet _OneEuro filtresi) tutar.
+# Bu sayede ekrandaki iki farklı kişinin hareketi birbirinin filtresini etkilemez.
+# Hafıza Yönetimi ise ekranda bir süredir görünmeyen kişilere ait filtre durumlarını hafızadan temizleyerek gereksiz bellek kullanımını engelleriz.
+# En Önemli Detay: Bu sınıf, arayüz (QLabel) koordinat sisteminde çalışır.
 class _BBoxSmoother:
-    """
-    track-id başına (x,y,w,h) için OneEuro filtreleri.
-    DİKKAT: QLabel koordinat sisteminde çalışır (UI-space smoothing).
-    """
     def __init__(self, mincutoff: float = 1.0, beta: float = 0.007):
         self._mincut = float(mincutoff)
         self._beta   = float(beta)
@@ -126,12 +128,9 @@ class CameraController(QObject):
         self._ts_hist = deque(maxlen=30)
         self._last_ts = None
 
-        # --- Per-tracker pose cache ---
-        # track_id -> DTO (içine 'last_seen' eklenecek)
         self._pose_cache: Dict[int, Dict] = {}
-        self._pose_stale_max_sec: float = 0.40  # 400 ms: “takılı kalma”yı pratikte bitirir
+        self._pose_stale_max_sec: float = 0.40  # 400 ms
 
-        # UI-space bbox smoother
         self._bbox_smoother = _BBoxSmoother(mincutoff=1.0, beta=0.007)
 
     # ------------------------------
@@ -175,18 +174,14 @@ class CameraController(QObject):
             except Exception:
                 pass
 
-    # ------------------------------ Pose sinyali (Per-tracker hafıza)
     @pyqtSlot(object)
     def on_pose_results(self, detections: object):
-        """
-        detections: List[PoseDetectionDTO] (dict)
-        DTO: {track_id, class_id, label, bbox:(x,y,w,h), conf, ts}
-        """
         now = time.time()
         if not isinstance(detections, list):
             return
 
-        # 1) Gelen taze bilgileri cache'e işle
+        # Önce, _pose_cache'i kontrol ederek sadece "taze" (son 400ms içinde görülmüş) olan tespitleri çizer.
+        # Böylelikle, AI'dan bir süredir sonuç gelmese bile kutuların ekranda donup kalmasını engeller.
         for d in detections:
             try:
                 tid = d.get("track_id", None)
@@ -194,15 +189,14 @@ class CameraController(QObject):
                     continue
                 tid = int(tid)
 
-                # DTO'ya UI-zamanlı last_seen ekle
-                d = dict(d)  # kopya al (yan etkisiz)
+                d = dict(d) # kopyasını alalım.
                 d["last_seen"] = now
                 self._pose_cache[tid] = d
             except Exception:
-                # tek bir bozuk DTO tüm listeyi bozmasın
+                # tek bir bozuk DTO tüm listeyi bozmasın.
                 continue
 
-        # 2) Çok uzun süredir hiç gelmeyenleri cache'ten süpür (opsiyonel; bellek koruma)
+        # 2) Çok uzun süredir hiç gelmeyenleri cache'ten süpürelim gitsin.
         try:
             old_ids = [tid for tid, data in self._pose_cache.items() if (now - data.get("last_seen", 0.0)) > 10.0]
             for tid in old_ids:
@@ -210,7 +204,6 @@ class CameraController(QObject):
         except Exception:
             pass
 
-    # ------------------------------ Yardımcı: frame→QLabel mapping (float)
     @staticmethod
     def _map_bbox_to_label_float(
         bbox: Tuple[int,int,int,int],
@@ -222,7 +215,6 @@ class CameraController(QObject):
         W, H   = label_wh
         if w0 <= 0 or h0 <= 0 or W <= 0 or H <= 0:
             return None
-        # KeepAspectRatioByExpanding
         s = max(W / float(w0), H / float(h0))
         scaled_w = w0 * s
         scaled_h = h0 * s
@@ -234,13 +226,12 @@ class CameraController(QObject):
         h_p = h * s
         return (float(x_p), float(y_p), float(w_p), float(h_p))
 
-    # ------------------------------ Ana çizim
     @pyqtSlot(object)
     def update_display(self, frame: np.ndarray):
         if frame is None:
             return
 
-        # ----- FPS -----
+        # Son 30 kareyle FPS ölçümü.
         now = time.time()
         if self._last_ts is not None:
             self._ts_hist.append(now - self._last_ts)
@@ -252,12 +243,10 @@ class CameraController(QObject):
         else:
             fps = ms = 0.0
 
-        # ----- QPixmap -----
         h0, w0, ch = frame.shape
         img = QImage(frame.data, w0, h0, ch * w0, QImage.Format_RGB888).rgbSwapped()
         pix = QPixmap.fromImage(img)
 
-        # ----- QLabel crop (KeepAspectRatioByExpanding) -----
         lbl_size = self._ui['display_label'].size()
         W, H = lbl_size.width(), lbl_size.height()
         scaled = pix.scaled(lbl_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
@@ -265,17 +254,14 @@ class CameraController(QObject):
         y_off = (scaled.height() - H) // 2
         cropped = scaled.copy(x_off, y_off, W, H)
 
-        # ----- Çizim -----
         painter = QPainter(cropped)
         painter.setRenderHint(QPainter.TextAntialiasing)
         painter.setFont(QFont("Consolas", 10, QFont.Bold))
 
-        # FPS overlay (sol üst, gölgeli)
         txt = f"{fps:4.0f} fps  {ms:3.0f} ms"
         painter.setPen(QPen(QColor(0, 0, 0), 2)); painter.drawText(6, 16, txt)
         painter.setPen(Qt.white);                 painter.drawText(5, 15, txt)
 
-        # ----- Pose çizimi (Per-tracker eskime + UI-space smoothing) -----
         try:
             # 1) Çizilecek taze kutuları topla
             to_draw: List[Dict] = []
@@ -321,7 +307,7 @@ class CameraController(QObject):
                     painter.setPen(Qt.white);               painter.drawText(tx, ty, text)
             # else: taze yoksa overlay çizme (doğal sönüm)
         except Exception:
-            # UI’yi kilitlemeyelim; hata ayıklamada loglayabilirsin.
+            # UI’yi kilitlemeyelim.
             pass
 
         painter.end()

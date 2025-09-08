@@ -49,7 +49,7 @@ if __name__ == "__main__":
     win.show()
 
     # ---------- Asenkron & Merkezi Temiz Çıkış ----------
-    pending_tasks = 1   # şimdilik sadece Firebase
+    pending_tasks = 1
 
     def _task_done():
         global pending_tasks

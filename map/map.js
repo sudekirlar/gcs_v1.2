@@ -1,29 +1,21 @@
 /* map/ map.js */
-/* =====================================================================
-   GCS Web Map  –  OpenLayers 9.1
-   • Dinamik-Zoom: drone + iz + (takip grubundaki) mobil marker’lar kadraja sığar
-   • Kullanıcı etkileşimi → auto-follow anında kapanır
-   • goToFocus_pushButton → her durumda (açıksa/kapalıysa) taze fit (recenterAndFollow)
-   • Demo uçuş: HOME etrafında canlı daire
- ===================================================================== */
 
-/* ---------- Sabitler & yardımcı ---------- */
+/* Evi lab olarak başlatıyorum. */
 const HOME = { lon: 35.352882053899194, lat: 37.062638526893295 };
 const ll   = (lo, la) => ol.proj.fromLonLat([lo, la]);
 
-/* ---------- Küresel objeler ---------- */
 let map, view, vectorSrc, droneF, pathF;
 let autoFollow = false;
 // "İlk paket" durumunu yönetmek için bayrak
 let isFirstPacket = true;
 
-/* ---------- WebChannel & kurulum ---------- */
+/* WebChannel kurulumu */
 window.onload = () => {
   new QWebChannel(qt.webChannelTransport, ch => {
     window.backend = ch.objects.backend;
     initMap();
     backend.onMapReady();
-    // Demo'yu otomatik başlat
+    // Demodur!!!
     startDemoFlight();
   });
 };
@@ -35,20 +27,20 @@ function initMap() {
   droneF = new ol.Feature(new ol.geom.Point(ll(HOME.lon, HOME.lat)));
   droneF.setStyle(new ol.style.Style({
     image: new ol.style.Icon({
-      src   : '../assets/drone.png', // Göreceli yol varsayımı
+      src   : '../assets/drone.png',
       anchor: [0.5, 0.5],
       scale : 0.08,
       rotateWithView: true
     })
   }));
-  droneF.set('fitGroup', 'follow');   // dinamik kadraj grubunda
+  droneF.set('fitGroup', 'follow');   // dinamik kadraj grubuna alalım.
 
-  /* Polyline */
+  /* Polyline çizimi */
   pathF = new ol.Feature(new ol.geom.LineString([]));
   pathF.setStyle(new ol.style.Style({
     stroke: new ol.style.Stroke({ color:'#1E90FF', width:3 })
   }));
-  pathF.set('fitGroup', 'follow');    // dinamik kadraj grubunda
+  pathF.set('fitGroup', 'follow');    // dinamik kadraj grubuna alalım.
 
   vectorSrc.addFeatures([droneF, pathF]);
 
@@ -63,7 +55,7 @@ function initMap() {
     view:view
   });
 
-  // Kullanıcı haritayı oynatırsa auto-follow’u kapat
+  // Kullanıcı haritayı oynatırsa auto-follow’u kapat.
   map.on('pointerdown', () => {
     if (autoFollow) {
       disableAutoFollow();
@@ -71,9 +63,7 @@ function initMap() {
   });
 }
 
-/* =====================================================================
-   Ortak: follow grubunun tamamını kadraja sığdır
- ===================================================================== */
+/* Ortak: follow grubunun tamamını kadraja sığdır. */
 function fitFollowExtent(skipAnim) {
   const ext = [Infinity, Infinity, -Infinity, -Infinity];
   vectorSrc.getFeatures().forEach(f => {
@@ -90,20 +80,18 @@ function fitFollowExtent(skipAnim) {
   }
 }
 
-/* =====================================================================
-   Telemetri  (Python → updateDrone({lon,lat,yaw}))
- ===================================================================== */
+/* Python telemetri tarafından lat lon alt gelince map'e alalım. */
 function updateDrone(p) {
   const coord = ll(p.lon, p.lat);
 
-  /* Drone pozisyonu & yönü */
+  /* Drone pozisyonu ve yönü için yaw'ı alıyoruz. */
   droneF.getGeometry().setCoordinates(coord);
   droneF.getStyle().getImage().setRotation((p.yaw||0)*Math.PI/180);
 
   /* Polyline noktası */
   pathF.getGeometry().appendCoordinate(coord);
 
-  // İlk paket geldiyse auto-follow’u aç ve taze fit yap (animasyonsuz)
+  // İlk paket geldiyse auto-follow’u aç ve fit yap.
   if (isFirstPacket) {
     enableAutoFollow(true);
     isFirstPacket = false;
@@ -137,9 +125,7 @@ function dynamicFit(coord) {
   }
 }
 
-/* =====================================================================
-   Auto-follow kontrol
- ===================================================================== */
+/* Auto-follow kontrol */
 function enableAutoFollow(skipAnim) {
   // Açık değilse aç; açıksa da taze bir fit uygula
   if (!autoFollow) {
@@ -157,13 +143,10 @@ function disableAutoFollow() {
 
 /* Python’daki goToFocus_pushButton bu fonksiyonu çağırır */
 function recenterAndFollow() {
-  // Focus: auto-follow’u aç ve follow grubunu DERHAL kadraja sığdır
+  // Focus: auto-follow’u aç ve follow grubunu kadraja sığdır
   enableAutoFollow(false);
 }
 
-/* =====================================================================
-   Marker & Polyline yardımcıları (butonlar için)
- ===================================================================== */
 function addMarker(lon, lat, id) {
   const m = new ol.Feature(new ol.geom.Point(ll(lon, lat)));
   m.setId(id);
@@ -191,7 +174,7 @@ function addMobileMarker(lon, lat, id) {
   }));
   vectorSrc.addFeature(f);
 
-  // Auto-follow açıksa follow grubunun tamamına taze fit
+  // Auto-follow açıksa follow grubunun tamamına fit
   if (autoFollow) {
     fitFollowExtent(false);
   }
@@ -210,9 +193,7 @@ function clearPolyline() {
   if (autoFollow) disableAutoFollow(); // yol silindi → kapat
 }
 
-/* =====================================================================
-   DEMO uçuş – 90 m yarıçaplı daire (5 Hz)
- ===================================================================== */
+/* DEMODUR!!! */
 let demoTimer = null;
 function startDemoFlight() {
   if (demoTimer) return;

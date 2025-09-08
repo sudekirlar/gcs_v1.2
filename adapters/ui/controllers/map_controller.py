@@ -4,6 +4,8 @@ import json, time
 from PyQt5.QtCore       import QObject, pyqtSlot, QTimer, QUrl
 from PyQt5.QtWebChannel import QWebChannel
 
+# Python'dan JavaScript'e giderken runJavaScript metodunu kullanarak Python'dan JavaScript fonksiyonlarını doğrudan çağırabiliyoruz. Drone konumu veya marker ekleme gibi komutları bu yolla gönderiyoruz.
+# JavaScript'ten Python'a QWebChannel'ı kullandık. Python'daki MapController nesnemizi JavaScript'e backend adıyla kaydettik.
 
 def locate_map_html():
     cur = Path(__file__).resolve().parent
@@ -20,10 +22,13 @@ class MapController(QObject):
         super().__init__(parent)
         self._v = map_widget
         self._log = logger
-        self._pg  = self._v.page()
+        self._pg  = self._v.page() # web sayfasının kendisiyle iletişime geçmek için kullanılır.
         self._pending = {}
-        self._last_known_pos = {}  # Drone'un son bilinen pozisyonunu kalıcı olarak tutar
+        self._last_known_pos = {}  # Drone'un son bilinen pozisyonunu kalıcı olarak tutar.
 
+        # Aşağıdaki satır, MapController'ın kendisini (self) JavaScript tarafına backend ismiyle tanıtır.
+        # Artık JavaScript kodu, qt.webChannelTransport.objects.backend üzerinden
+        # bu Python nesnesinin @pyqtSlot ile işaretlenmiş metodlarını çağırabilir.
         ch = QWebChannel(self._pg); ch.registerObject("backend", self)
         self._pg.setWebChannel(ch)
 
@@ -39,15 +44,15 @@ class MapController(QObject):
     # ------------ Core → JS ------------
     @pyqtSlot(dict)
     def _on_tel(self, d):
-        # Hem geçici listeyi hem de kalıcı son durumu güncelle
+        # Lat, lon, alt için telemetri tarafına bakıyoruz.
         new_data = {k: d[k] for k in ('lat', 'lon', 'yaw') if k in d}
         self._pending.update(new_data)
-        self._last_known_pos.update(new_data)  # Kalıcı durumu da güncelle
+        self._last_known_pos.update(new_data)
         if not self._t.isActive(): self._t.start()
 
     def _flush(self):
         if {'lat','lon'}.issubset(self._pending):
-            self._pg.runJavaScript(f"updateDrone({json.dumps(self._pending)})")
+            self._pg.runJavaScript(f"updateDrone({json.dumps(self._pending)})") # JSON formatı, 80ms'de bir güncelleme atar. (Throttling)
         self._pending.clear()
 
     # ------------ UI API ---------------

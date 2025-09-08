@@ -19,7 +19,7 @@ class ConnectionController(QObject):
         core.connection_closed.connect(self._closed)
 
     def _populate_ports(self):
-        self._combo.clear()
+        self._combo.clear() # Önce içi temizleyelim ve ne takılı bakalım + TCP ekleyelim.
         for p in QSerialPortInfo.availablePorts():
             self._combo.addItem(p.portName())
         self._combo.addItem("TCP (SITL)")

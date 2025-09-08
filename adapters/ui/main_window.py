@@ -5,7 +5,6 @@ from PyQt5.QtWidgets import QMainWindow, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.uic.properties import QtGui
 
-# ---------------- Controller'lar ----------------
 from adapters.ui.controllers.command_controller    import CommandController
 from adapters.ui.controllers.connection_controller import ConnectionController
 from adapters.ui.controllers.telemetry_controller  import TelemetryController
@@ -15,14 +14,15 @@ from adapters.ui.controllers.assistance_controller import AssistanceController
 from adapters.ui.controllers.camera_controller     import CameraController
 
 from newDesign import Ui_MainWindow
-from config.settings import Settings  # type hint
+from config.settings import Settings
 from adapters.firebase.firebase_adapter import FirebaseAdapter
 from adapters.ui.controllers.system_info_controller import SystemInfoController
 
+# Model: GCSCore (veriyi ve iş mantığını tutan katman).
+# View: Ui_MainWindow (Qt Designer ile oluşturulan, butonları vb. içeren görsel kısım).
+# Controller: MainWindow ve içindeki CommandController, TelemetryController gibi yardımcı sınıflar (Model ile View arasındaki iletişimi organize eden, olayları yöneten katman).
+
 class MainWindow(QMainWindow):
-    """
-    View  +  Controller wiring (GCS + Kamera + Mobil).
-    """
 
     def __init__(
         self,
@@ -36,18 +36,17 @@ class MainWindow(QMainWindow):
     ):
         super().__init__(parent)
 
-        # ------------ Bağımlılıklar ------------
         self._core = core          # GCS iş mantığı
         self._log  = logger        # Logger (uygulama geneli)
         self._fb   = fb_adapter    # Firebase adaptörü
 
-        # ------------ UI yükle ------------
+        # UI yükleyelim. (View)
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.ui.exit_pushButton.clicked.connect(self.close)
         self.ui.minimize_pushButton.clicked.connect(self.showMinimized)
 
-        # ------------ mapShown_label → QWebEngineView ------------
+        # QT'de label bırakmışız, onu QWebEngineView yapıyoruz kod ile!!
         placeholder = self.ui.mapShown_label
         self.mapView = QWebEngineView(self.ui.centralwidget)
         self.mapView.setObjectName("mapView")
@@ -62,12 +61,12 @@ class MainWindow(QMainWindow):
             self.mapView.show()
         placeholder.deleteLater()
 
-        # ------------ AssistanceController (mobil) ------------
+        # GCSCore'daki mobile_request_added ile Assistance Controller içindeki on_request bağlanır.
+        # Böylece Core'da yeni bir istek oluştuğunda, UI'daki controller'ın haberi olur ve listeyi günceller.
         self._assist = AssistanceController(self.ui, self._log)
         core.mobile_request_added.connect(self._assist.on_request)
         self.ui.loadMission_pushButton.clicked.connect(self._deliver_aid)
 
-        # ------------ Kamera Controller ------------
         self.cam_ctrl = CameraController(
             ui_widgets={
                 "open_btn":     self.ui.openCamera_pushButton,
@@ -81,10 +80,9 @@ class MainWindow(QMainWindow):
             parent=self,
         )
 
-        # **Yüksek hacimli kare sinyali doğrudan UI controller'a**
+        # **Yüksek hacimli kare sinyali doğrudan UI controller'a** (Performans için yapıldı.)
         camera_adapter.new_frame.connect(self.cam_ctrl.update_display)
 
-        # ------------ Diğer Controller'lar ------------
         self.log_ctrl = LogController(self.log_panel, self._log)
         self.conn_ctrl = ConnectionController(
             combo=self.combo,
@@ -99,7 +97,7 @@ class MainWindow(QMainWindow):
         self.tel_ctrl = TelemetryController(self.telemetry_widgets, core, parent=self)
         self.cmd_ctrl = CommandController(self.ui, core, self._log, parent=self)
 
-        # MapController gerçek mapView ile bağlanıyor
+        # MapController gerçek mapView ile bağlanıyor.
         self.map_ctrl = MapController(
             map_widget=self.mapView,
             core=core,
@@ -107,7 +105,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
 
-        # ------------ UI ↔ Map bağlantıları ------------
+        # UI-Map bağlantıları.
         self.ui.clearPath_pushButton.clicked.connect(self.map_ctrl.clear_path)
         self.ui.addMarker_pushButton.clicked.connect(self.map_ctrl.add_marker_here)
         self.ui.clearMarker_pushButton.clicked.connect(self.map_ctrl.clear_markers)
@@ -129,7 +127,6 @@ class MainWindow(QMainWindow):
         self._log.info("Ana pencere kapanıyor – kapanış işlemleri tetiklendi.")
         super().closeEvent(event)  # <<<
 
-    # ------------ Widget kısayolları ------------
     @property
     def combo(self):
         return self.ui.comPortTelemetry_comboBox
@@ -167,10 +164,8 @@ class MainWindow(QMainWindow):
 
     # ------------ Yardım Gönder ------------
     def _deliver_aid(self):
-        """
-        'Görev Yükle' (Yardım Ulaştır) butonunun slot'u.
-        Seçili mobil isteği alır ve core'a iletir.
-        """
+        # Görev yükleye basılınca önce controller tarafa gidip kullanıcı hangi isteği seçti sorarız.
+        # Eğer bir istek seçilmişse core'u çağırırız.
         req = self._assist.get_selected_request()
         if req:
             self._log.info(f"[UI] Seçilen yardım isteği: {req}")

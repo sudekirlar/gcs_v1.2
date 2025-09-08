@@ -1,10 +1,6 @@
 # core/ports/pymavlink_port.py
 
-"""
-rev.5 – goto(...) ve set_servo(...) imzaları mevcut
-"""
 from typing import Protocol, runtime_checkable, Any
-
 
 @runtime_checkable
 class IPyMavlinkPort(Protocol):

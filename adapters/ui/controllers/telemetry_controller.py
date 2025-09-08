@@ -7,7 +7,8 @@ class TelemetryController(QObject):
         super().__init__(parent)
         self._w = widgets
         self._last_bat_v = None  # formatta voltaj yazmak için
-        # Throttle cache
+        # Aşağıdaki throttle cache'in amacı, bir verinin son güncellenen değerini hafızada tutmaktır.
+        # Bu sayede, sadece gerçekten bir değişiklik olduğunda UI elemanını güncelleyerek performans kazanmaktır.
         self._last_pct_val = None
         self._last_band = None  # 'green' | 'orange' | 'red' | 'gray'
         self._last_text = None
@@ -23,7 +24,7 @@ class TelemetryController(QObject):
             self._connected = False
 
     @pyqtSlot(dict)
-    def _update(self, d):
+    def _update(self, d): # Sadece değişmiş verili değerlerimizi alıp UI'a basalım.
         if 'yaw' in d:   self._w['yaw'].setText(f"{d['yaw']:.1f}°")
         if 'pitch' in d: self._w['pitch'].setText(f"{d['pitch']:.1f}°")
         if 'roll' in d:  self._w['roll'].setText(f"{d['roll']:.1f}°")
@@ -34,7 +35,6 @@ class TelemetryController(QObject):
         if 'hdop' in d:  self._w['hdop'].setText(f"{d['hdop']:.2f}")
         if 'mode' in d:  self._w['mode'].setText(d['mode'])
 
-        # ---- Batarya ----
         if 'bat_v' in d:
             self._last_bat_v = d['bat_v']
 
@@ -54,7 +54,7 @@ class TelemetryController(QObject):
                     text = f"{value}%"
                 band = ('green' if value >= 60 else 'orange' if value >= 30 else 'red')
 
-            # ---- Throttle: yalnız değişince güncelle ----
+            # Batarya için de yalnızca değişince güncelleyelim.
             if value != self._last_pct_val:
                 bar.setValue(value)
                 self._last_pct_val = value
@@ -64,7 +64,7 @@ class TelemetryController(QObject):
                 self._last_text = text
 
             if band != self._last_band:
-                # Stil sadece band değiştiğinde yazılsın
+                # Batarya rengi verelim duruma bağlı.
                 if band == 'green':
                     color = "#2ecc71"
                 elif band == 'orange':

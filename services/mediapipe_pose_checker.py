@@ -1,5 +1,19 @@
 # mediaipipe_pose_checker.py
 
+# MultiPoseManager: Bu, dış dünyaya açılan ana sınıftır. Görüntüyü (frame) alır ve sonuçları döndürür. YOLO modelini çalıştırır. Tespit edilen her bir insan için bir PoseTracker nesnesi oluşturur, yönetir ve yaşam döngüsünü takip eder (doğum, yaşam, ölüm).
+# PoseTracker: Bu sınıf, tek bir kişiyi temsil eder. MultiPoseManager, sahnede 2 kişi tespit ederse, 2 tane PoseTracker nesnesi oluşturur. Görevi, kendisine atanan kişiyi kareler arasında takip etmek, o kişiye ait bölgeyi (ROI - Region of Interest) stabilize etmek ve bu bölgeyi duruş analizi için kendi işçisine göndermektir.
+# _TrackerPoseWorker (Ağır İşçi): Her PoseTracker'ın kendine ait bir _TrackerPoseWorker'ı vardır. Bu işçi, ayrı bir thread üzerinde yaşar. Tek ve en yoğun görevi, kendisine verilen ROI üzerinde MediaPipe'ı çalıştırmak, eklem noktalarını bulmak ve bu noktaları kullanarak duruşu sınıflandırmaktır. Her takipçinin kendi iş parçacığının olması, birden fazla kişinin aynı anda paralel olarak analiz edilmesini sağlar.
+
+# (Çoklu Tespit Engelleme): YOLO bazen aynı kişi için birden fazla, iç içe geçmiş kutu bulabilir. Bu fonksiyon, IoU (Intersection over Union), merkez mesafesi ve boyut benzerliği gibi metrikleri kullanarak bu mükerrer tespitleri temizler ve sadece en anlamlı olanları bırakır.
+
+# Eşleşme Var: Tracker'ın update_detection metodu çağrılır. Tracker'ın konumu güncellenir ve age (yaş) sayacı sıfırlanır.
+# Tracker Eşleşmedi: Kişi anlık olarak kadrajdan çıkmış veya YOLO tarafından kaçırılmış olabilir. mark_missed çağrılır ve age sayacı bir artar. Eğer age, TRACK_AGE_MAX'ı aşarsa, o kişinin sahneden ayrıldığı varsayılır ve tracker silinir.
+# Tespit Eşleşmedi: Sahnede yeni bir kişi olabilir. Ancak sistem hemen yeni bir tracker oluşturmaz.
+
+# ROI Stabilizasyonu (RoiStabilizer): YOLO'nun verdiği kutu koordinatları her karede hafifçe titrer. Bu sınıf, bu titremeyi EMA (Exponential Moving Average) benzeri bir filtre ile yumuşatarak MediaPipe'a daha stabil bir ROI sunar. Bu, MediaPipe'ın daha tutarlı sonuçlar üretmesine yardımcı olur.
+
+# ROI, ana görüntüden kesilir. Eğer mean_luma (ortalama parlaklık) CLAHE_LUMA_THRESH'in altındaysa, yani görüntü çok karanlıksa, CLAHE (Contrast Limited Adaptive Histogram Equalization) uygulanır. Bu, karanlık bölgelerdeki detayları ortaya çıkararak MediaPipe'in eklem noktalarını daha iyi bulmasını sağlayan çok kritik bir adımdır.
+
 # BLAS/OpenMP oversubscription engellemek için konuldu.
 import os
 os.environ.setdefault("OMP_NUM_THREADS", "1")

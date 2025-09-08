@@ -13,9 +13,9 @@ class AssistanceController(QObject):
     Mobil yardım isteğini renkli ve seçilebilir şekilde gösterir.
     """
     _COLOR_MAP = {
-        "x": "#FFA500",    # Gıda → turuncu
-        "=": "#FF2400",    # İlk yardım → kırmızı
-        "!": "#7DF9FF",    # Afad → açık mavi
+        "x": "#FFA500",    # Gıda: turuncu
+        "=": "#FF2400",    # İlk yardım: kırmızı
+        "!": "#7DF9FF",    # Afad: açık mavi
     }
 
     _DESC_MAP = {
@@ -30,7 +30,7 @@ class AssistanceController(QObject):
         self._log = logger
         self._requests = []
 
-        # QTextEdit yerine QListWidget yerleştir
+        # QTextEdit yerine QListWidget yerleştiriyoruz ki seçim yapabilelim.
         self._ui.mobileBox_textEdit.setVisible(False)
         self._list = QListWidget(self._ui.tab_7)
         self._list.setGeometry(self._ui.mobileBox_textEdit.geometry())
@@ -48,7 +48,7 @@ class AssistanceController(QObject):
         lat_txt = f"{abs(r.lat):.5f} {'N' if r.lat >= 0 else 'S'}"
         lon_txt = f"{abs(r.lon):.5f} {'E' if r.lon >= 0 else 'W'}"
 
-        # ✔ Tüm bilgileri içeren metin
+        # Tüm bilgileri içeren metni hazırlayalım.
         text = f"{desc}\nKonum: {lat_txt}, {lon_txt}\nTC: {r.tc}"
 
         item = QListWidgetItem()
@@ -63,7 +63,7 @@ class AssistanceController(QObject):
             font-size: 12px;
         """)
 
-        # Boyutu içeriğe göre ayarla
+        # Boyutu içeriğe göre ayarla.
         label.adjustSize()
         item.setSizeHint(label.sizeHint())
 
