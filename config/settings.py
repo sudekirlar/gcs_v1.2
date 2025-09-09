@@ -21,7 +21,7 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     )
 
     # 2) Test Videosu
-    video_uri = Path("source_videos/sample1.mp4").resolve().as_uri()
+    video_uri = Path("source_videos/sample10.MOV").resolve().as_uri()
     video_pipeline = (
         f"uridecodebin uri={video_uri} expose-all-streams=false ! "
         "videoconvert ! video/x-raw,format=BGR ! "
@@ -46,8 +46,15 @@ def _default_cam_sources() -> Tuple[CameraSource, ...]:
     #     'appsink drop=true max-buffers=1 sync=false'
     # )
 
+    # siyi_rtsp_pipeline = (
+    #     'rtspsrc location="rtsp://192.168.144.25:8554/main.264" latency=0 protocols=udp ! '
+    #     'rtph264depay ! h264parse ! decodebin ! '
+    #     'videoconvert ! video/x-raw,format=BGR ! '
+    #     'appsink drop=true max-buffers=1 sync=false'
+    # )
+
     siyi_rtsp_pipeline = (
-        'rtspsrc location="rtsp://192.168.144.25:8554/main.264" latency=0 protocols=udp ! '
+        'rtspsrc location="rtsp://10.209.140.112:8554/a8" latency=0 protocols=udp ! '
         'rtph264depay ! h264parse ! decodebin ! '
         'videoconvert ! video/x-raw,format=BGR ! '
         'appsink drop=true max-buffers=1 sync=false'

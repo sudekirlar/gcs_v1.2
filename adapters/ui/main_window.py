@@ -1,9 +1,11 @@
 # adapters/ui/main_window.py
 from __future__ import annotations
 
+from PyQt5.QtCore import pyqtSlot
 from PyQt5.QtWidgets import QMainWindow, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.uic.properties import QtGui
+import time
 
 from adapters.ui.controllers.command_controller    import CommandController
 from adapters.ui.controllers.connection_controller import ConnectionController
@@ -122,6 +124,16 @@ class MainWindow(QMainWindow):
         )
         self.sys_ctrl.start()
 
+        # Akıllı Panel Hafızasını Başlat
+        self._panels_state = {}
+
+        # Olayları, Paneli Güncelleyecek Metotlara Bağla
+        camera_adapter.pose_results.connect(self._on_pose_results_for_panel)
+        core.mobile_request_added.connect(self._on_mobile_request_for_panel)
+
+        # Panelleri başlangıç durumuna getir
+        self._reset_panels()
+
 
     def closeEvent(self, event):  # <<<
         self._log.info("Ana pencere kapanıyor – kapanış işlemleri tetiklendi.")
@@ -180,3 +192,85 @@ class MainWindow(QMainWindow):
             frame.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888
         ).rgbSwapped()
         self.ui.cameraShown_label.setPixmap(QtGui.QPixmap.fromImage(qimg))
+
+    def _format_panel_html(self, top_icons: str, title: str, bottom_icons: str) -> str:
+        """Paneller için standart bir HTML şablonu oluşturur."""
+        return f"""
+        <div style="text-align: center; font-family: Consolas; color: white;">
+            <span style="font-size: 20px;">{top_icons}</span><br>
+            <b style="font-size: 12px;">{title}</b><br>
+            <span style="font-size: 15px;">{bottom_icons}</span>
+        </div>
+        """
+
+    @pyqtSlot()
+    def _reset_panels(self):
+        """Tespit panellerini ve hafızayı başlangıç durumuna sıfırlar."""
+        self._panels_state = {
+            "tpose": {"announced": False, "data": None},
+            "armsup": {"announced": False, "data": None},
+            "mobile": {"announced": False, "data": None}
+        }
+
+        # Panellerin başlangıç metinlerini ayarla (YENİ LABEL İSİMLERİYLE)
+        self.ui.bodyDetectedShown_label.setText(self._format_panel_html("⏳", "T-Pose Bekleniyor", "❔❔❔"))
+        self.ui.woundDetectedShown_label.setText(self._format_panel_html("⏳", "Arms-Up Bekleniyor", "❔❔❔"))
+        self.ui.fireDetectedShown_label.setText(self._format_panel_html("⏳", "Mobil İstek Bekleniyor", "❔❔❔"))
+
+        self._log.info("Akıllı bilgi panelleri sıfırlandı.")
+
+    @pyqtSlot(object)
+    def _on_mobile_request_for_panel(self, req):
+        """Yeni bir mobil istek geldiğinde ilgili paneli günceller."""
+        state = self._panels_state["mobile"]
+        if not state["announced"]:
+            state["announced"] = True
+
+            html_content = self._format_panel_html(
+                top_icons="📱➡️🚁",
+                title="MOBİL BİLDİRİM",
+                bottom_icons=f"LAT: {req.lat:.3f}<br>LON: {req.lon:.3f}"
+            )
+            # Mobil bildirim `fireDetectedShown_label`'a gidecek (YENİ LABEL İSMİ)
+            self.ui.fireDetectedShown_label.setText(html_content)
+            self._log.info("Mobil bildirim paneli güncellendi.")
+
+    @pyqtSlot(object)
+    def _on_pose_results_for_panel(self, detections: list):
+        """Pose sonuçlarını işler ve T-Pose/Arms-Up panellerini günceller."""
+        if self._panels_state["tpose"]["announced"] and self._panels_state["armsup"]["announced"]:
+            return
+
+        for detection in detections:
+            label = detection.get("label")
+
+            if label == "T-POSE":
+                state = self._panels_state["tpose"]
+                if not state["announced"]:
+                    state["announced"] = True
+
+                    html_content = self._format_panel_html(
+                        top_icons="📦➡️🧍",
+                        title="T-POSE TESPİT EDİLDİ",
+                        bottom_icons=f"ID: {detection.get('track_id', -1)} | Güven: {detection.get('conf', 0):.2f}"
+                    )
+                    # T-Pose `bodyDetectedShown_label`'a gidecek (YENİ LABEL İSMİ)
+                    self.ui.bodyDetectedShown_label.setText(html_content)
+                    self._log.info("T-Pose paneli güncellendi.")
+
+            elif label == "ARMS-UP":
+                state = self._panels_state["armsup"]
+                if not state["announced"]:
+                    state["announced"] = True
+
+                    html_content = self._format_panel_html(
+                        top_icons="📦➡️🙌",
+                        title="ARMS-UP TESPİT EDİLDİ",
+                        bottom_icons=f"ID: {detection.get('track_id', -1)} | Güven: {detection.get('conf', 0):.2f}"
+                    )
+                    # Arms-Up `woundDetectedShown_label`'a gidecek (YENİ LABEL İSMİ)
+                    self.ui.woundDetectedShown_label.setText(html_content)
+                    self._log.info("Arms-Up paneli güncellendi.")
+
+            if self._panels_state["tpose"]["announced"] and self._panels_state["armsup"]["announced"]:
+                break
