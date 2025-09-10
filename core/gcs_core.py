@@ -241,12 +241,12 @@ class GCSCore(QObject):
     def _do_post_release_action(self):
         try:
             # RTL (UI'daki set_mode akışını kullanır)
-            self._log.info("► Post-release eylem: set_mode('RTL') gönderiliyor…")
-            self.set_mode("RTL")
+            # self._log.info("► Post-release eylem: set_mode('RTL') gönderiliyor…")
+            # self.set_mode("RTL")
 
-            # # LAND tercih edilecekse:
-            # self._log.info("► Post-release eylem: set_mode('LAND') gönderiliyor…")
-            # self.set_mode("LAND")
+            # LAND tercih edilecekse:
+            self._log.info("► Post-release eylem: set_mode('LAND') gönderiliyor…")
+            self.set_mode("LAND")
 
         except Exception as e:
             self._log.error(f"Post-release eylem hatası: {e}")
