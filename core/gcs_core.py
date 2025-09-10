@@ -134,7 +134,7 @@ class GCSCore(QObject):
         #     return
 
         self._pending_req = req
-        self._pending_alt = max(self._current_alt, 5.0)  # Max irtifa değişecek.
+        self._pending_alt = 10.0  # 10m.
         self._awaiting_guided = True
 
         self._is_enroute_to_mobile_target = False

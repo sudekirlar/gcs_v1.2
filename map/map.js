@@ -1,7 +1,7 @@
 /* map/ map.js */
 
 /* Evi lab olarak başlatıyorum. */
-const HOME = { lon: 35.352882053899194, lat: 37.062638526893295 };
+const HOME = { lon: 30.097266796053063, lat: 40.73881735477532 };
 const ll   = (lo, la) => ol.proj.fromLonLat([lo, la]);
 
 let map, view, vectorSrc, droneF, pathF;
