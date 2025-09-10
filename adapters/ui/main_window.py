@@ -213,8 +213,8 @@ class MainWindow(QMainWindow):
         }
 
         # Panellerin başlangıç metinlerini ayarla (YENİ LABEL İSİMLERİYLE)
-        self.ui.bodyDetectedShown_label.setText(self._format_panel_html("⏳", "T-Pose Bekleniyor", "❔❔❔"))
-        self.ui.woundDetectedShown_label.setText(self._format_panel_html("⏳", "Arms-Up Bekleniyor", "❔❔❔"))
+        self.ui.bodyDetectedShown_label.setText(self._format_panel_html("⏳", "T-Pose", "❔❔❔"))
+        self.ui.woundDetectedShown_label.setText(self._format_panel_html("⏳", "Arms-Up", "❔❔❔"))
         self.ui.fireDetectedShown_label.setText(self._format_panel_html("⏳", "Mobil İstek Bekleniyor", "❔❔❔"))
 
         self._log.info("Akıllı bilgi panelleri sıfırlandı.")
@@ -228,7 +228,7 @@ class MainWindow(QMainWindow):
 
             html_content = self._format_panel_html(
                 top_icons="📱➡️🚁",
-                title="MOBİL BİLDİRİM",
+                title="MOBİL SAPMA ÇOK YÜKSEK!!!",
                 bottom_icons=f"LAT: {req.lat:.3f}<br>LON: {req.lon:.3f}"
             )
             # Mobil bildirim `fireDetectedShown_label`'a gidecek (YENİ LABEL İSMİ)
