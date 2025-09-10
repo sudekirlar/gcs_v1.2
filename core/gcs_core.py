@@ -50,7 +50,7 @@ class GCSCore(QObject):
         self._arrival_threshold_m: float = 3.0  # Hedefe ne kadar yaklaşınca varıldı sayacağımızı verelim.
         self._wait_before_release_ms: int = 15_000  # Hedefe varıldıktan sonra paketi bırakmadan önce beklenecek süreyi milisaniye cinsinden tanımlayalım. (15s ediyor.)
         self._servo_channel: int = 9
-        self._servo_pwm: int = 1750
+        self._servo_pwm: int = 1550
         self._release_done: bool = False # Paket bırakıldı mı bayrağı.
         self._post_release_delay_ms: int = 15_000  # Paket bırakıldıktan sonra RTL öncesi bekleme süresi.
         self._arrival_timer = QTimer(self) # Hedefe varıldığında başlar. 15s sonunda tek seferlik release payload çalıştırır.
@@ -241,12 +241,12 @@ class GCSCore(QObject):
     def _do_post_release_action(self):
         try:
             # RTL (UI'daki set_mode akışını kullanır)
-            # self._log.info("► Post-release eylem: set_mode('RTL') gönderiliyor…")
-            # self.set_mode("RTL")
+            self._log.info("► Post-release eylem: set_mode('RTL') gönderiliyor…")
+            self.set_mode("RTL")
 
             # LAND tercih edilecekse:
-            self._log.info("► Post-release eylem: set_mode('LAND') gönderiliyor…")
-            self.set_mode("LAND")
+            # self._log.info("► Post-release eylem: set_mode('LAND') gönderiliyor…")
+            # self.set_mode("LAND")
 
         except Exception as e:
             self._log.error(f"Post-release eylem hatası: {e}")
