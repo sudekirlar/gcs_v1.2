@@ -1,6 +1,8 @@
 # adapters/ui/controllers/command_controller.py
 
 from PyQt5.QtCore import QObject, pyqtSlot
+from adapters.audio.audio_notifier import AudioNotifier
+from PyQt5.QtCore import QTimer
 
 def _html_line(text: str, color: str = "#222", bold: bool = False) -> str:
     b1, b2 = ("<b>", "</b>") if bold else ("", "")
@@ -29,6 +31,10 @@ class CommandController(QObject):
         core.command_ack_received.connect(self._ack_status)
 
         self._append_status("Sistem hazır.", self.COLOR_INFO)
+
+        self._notifier = AudioNotifier("assets/sounds/giris.wav")
+
+        QTimer.singleShot(2000, self._notifier.play)
 
     @pyqtSlot()
     def _takeoff(self):

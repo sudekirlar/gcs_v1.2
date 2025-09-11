@@ -4,6 +4,7 @@ from __future__ import annotations
 from PyQt5.QtCore import QObject, Qt
 from PyQt5.QtWidgets import QListWidget, QListWidgetItem, QLabel
 
+from adapters.audio.audio_notifier import AudioNotifier
 from core.assistance_request import AssistanceRequest
 from adapters.logging.logger_adapter import LoggerAdapter
 
@@ -44,6 +45,8 @@ class AssistanceController(QObject):
 
     def on_request(self, r: AssistanceRequest):
         desc = self._DESC_MAP.get(r.durum, "İhtiyaç: Bilinmeyen")
+        self._notifier = AudioNotifier("assets/sounds/yeni_mobil_istek.wav")
+        self._notifier.play()
         color = self._COLOR_MAP.get(r.durum, "#ccc")
         lat_txt = f"{abs(r.lat):.5f} {'N' if r.lat >= 0 else 'S'}"
         lon_txt = f"{abs(r.lon):.5f} {'E' if r.lon >= 0 else 'W'}"

@@ -2,6 +2,7 @@
 
 from PyQt5.QtCore import QObject, pyqtSlot
 from PyQt5.QtSerialPort import QSerialPortInfo
+from adapters.audio.audio_notifier import AudioNotifier
 
 class ConnectionController(QObject):
     def __init__(self, combo, button, status_edit, core, logger, parent=None, close_button=None):
@@ -9,6 +10,9 @@ class ConnectionController(QObject):
         self._combo, self._button = combo, button
         self._status, self._core, self._logger = status_edit, core, logger
         self._close_btn = close_button
+
+        self._notifier = AudioNotifier("assets/sounds/baglanti_basarili.wav")
+
 
         self._populate_ports()
         button.clicked.connect(self._on_click)
@@ -41,13 +45,16 @@ class ConnectionController(QObject):
     def _opened(self, descr):
         self._status.append(f"Bağlantı başarılı ({descr})")
         self._logger.info(f"Bağlantı açıldı: {descr}")
+        self._notifier.play()
 
     @pyqtSlot(str)
     def _failed(self, reason):
         self._status.append(f"Bağlantı başarısız: {reason}")
         self._logger.error(f"Bağlantı hatası: {reason}")
 
+
     @pyqtSlot(str)
     def _closed(self, reason):
         self._status.append(f"Bağlantı kapandı: {reason}")
         self._logger.warning(f"Bağlantı kapandı: {reason}")
+        self._notifier.play("assets/sounds/baglanti_kapandi.wav")
