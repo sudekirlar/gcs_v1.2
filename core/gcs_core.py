@@ -51,6 +51,7 @@ class GCSCore(QObject):
         self._wait_before_release_ms: int = 15_000  # Hedefe varıldıktan sonra paketi bırakmadan önce beklenecek süreyi milisaniye cinsinden tanımlayalım. (15s ediyor.)
         self._servo_channel: int = 9
         self._servo_pwm: int = 1550
+
         self._release_done: bool = False # Paket bırakıldı mı bayrağı.
         self._post_release_delay_ms: int = 15_000  # Paket bırakıldıktan sonra RTL öncesi bekleme süresi.
         self._arrival_timer = QTimer(self) # Hedefe varıldığında başlar. 15s sonunda tek seferlik release payload çalıştırır.
